@@ -1,0 +1,54 @@
+firms:
+  source: VIIRS_SNPP_NRT
+  country: IND             # ISO country code — must exist in COUNTRY_BBOX in download.py
+  days_to_fetch: 5         # recent events to label (max 5 per API request, chunked)
+
+spatial:
+  search_radius_km: 5      # OSM search radius around each thermal event
+
+temporal:
+  short_window_days: 7
+  medium_window_days: 30
+  long_window_days: 30      # history fetch window (increase to 90 after first run)
+
+worldcover:
+  analysis_radius_km: 1    # radius for land-cover pixel sampling
+
+# ------------------------------------------------------------------ #
+# Pass 1 — loose candidate label thresholds
+# These determine candidate_label for every data-valid row.
+# ------------------------------------------------------------------ #
+labels:
+  industrial:
+    max_industrial_distance_km: 1   # OSM industrial landuse within this distance
+    min_persistence_score: 0.3      # fraction of days active in past 30d
+
+  wildfire:
+    min_forest_pct: 40
+
+  agricultural:
+    min_cropland_pct: 40
+
+# ------------------------------------------------------------------ #
+# Pass 2 — strict proxy-validation thresholds
+# A candidate must pass ALL conditions here to become proxy_verified.
+# Rows that fail become uncertain (queued for human review).
+# ------------------------------------------------------------------ #
+proxy_validation:
+  industrial:
+    min_persistence_score: 0.5    # stricter than candidate threshold
+    min_detections_30d: 5         # must have repeated detections
+    min_frp_ratio: 0.8            # current FRP at least 80% of historical mean
+
+  wildfire:
+    min_forest_pct: 60            # stricter than candidate threshold
+    min_frp_ratio: 1.5            # when baseline exists: current FRP must exceed it
+    min_frp_no_baseline: 10.0     # when no baseline: raw FRP threshold (MW)
+
+  agricultural:
+    min_cropland_pct: 60          # stricter than candidate threshold
+    max_persistence_score: 0.2    # burning should be temporary, not persistent
+
+output:
+  feature_dataset: data/processed/feature_dataset.csv
+  labelled_dataset: data/labelled/labelled_training_data.csv
