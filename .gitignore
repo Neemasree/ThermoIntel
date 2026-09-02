@@ -54,3 +54,7 @@ logs/
 # OS
 Thumbs.db
 .DS_Store
+
+# Large geospatial binary files
+*.pbf
+*.osm
