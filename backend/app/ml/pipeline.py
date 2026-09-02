@@ -13,6 +13,8 @@ from sklearn.metrics import (
     f1_score,
 )
 
+from sklearn.utils.class_weight import compute_sample_weight
+
 from app.ml.features import prepare_features, EXCLUDE_COLS
 from app.ml.labels import ALL_LABELS, LABEL_TO_INT, INT_TO_LABEL
 
@@ -100,8 +102,10 @@ def train(
     if params:
         default_params.update(params)
 
+    sample_weights = compute_sample_weight("balanced", y_train)
+
     model = xgb.XGBClassifier(**default_params)
-    model.fit(X_train, y_train)
+    model.fit(X_train, y_train, sample_weight=sample_weights)
     return model
 
 
