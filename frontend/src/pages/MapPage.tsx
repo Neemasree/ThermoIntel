@@ -1,221 +1,196 @@
-/**
- * MapPage — Full-screen immersive satellite thermal visualization.
- * Floating glass layer controls. Right-docked intelligence console.
- */
-import React, { useState } from 'react'
-import { Layers, ChevronDown, ChevronUp } from 'lucide-react'
+﻿import React, { useState } from 'react'
+import { Layers, ChevronDown, ChevronUp, List } from 'lucide-react'
 import { useAppContext } from '../App'
-import { frpColor, frpTier } from '../utils/eventUtils'
+import { frpColor } from '../utils/eventUtils'
 import EventInspector from '../components/EventInspector'
 import MapPanel from '../components/MapPanel'
 
-type LayerKey = 'events'
-
-/* ── Floating layer toggle ── */
-function LayerToggle({
-  label, active, color, count, onClick,
-}: {
-  label: string; active: boolean; color: string; count?: number; onClick: () => void
-}) {
-  return (
-    <div
-      onClick={onClick}
-      style={{
-        display: 'flex', alignItems: 'center', gap: 8,
-        padding: '6px 8px', cursor: 'pointer',
-        borderRadius: 'var(--r-sm)',
-        background: active ? `${color}12` : 'transparent',
-        border: `1px solid ${active ? color + '40' : 'transparent'}`,
-        transition: 'all var(--ease)',
-      }}
-      onMouseEnter={e => { if (!active) (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.04)' }}
-      onMouseLeave={e => { if (!active) (e.currentTarget as HTMLElement).style.background = 'transparent' }}
-    >
-      <div style={{
-        width: 10, height: 10, borderRadius: 2, flexShrink: 0,
-        background: active ? color : 'transparent',
-        border: `1.5px solid ${color}`,
-        boxShadow: active ? `0 0 6px ${color}50` : 'none',
-        transition: 'all var(--ease)',
-      }}/>
-      <span style={{ fontSize: 10, color: active ? 'var(--t2)' : 'var(--t4)', flex: 1 }}>{label}</span>
-      {count != null && (
-        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 9, color: active ? color : 'var(--t4)' }}>
-          {count.toLocaleString()}
-        </span>
-      )}
-    </div>
-  )
-}
-
 export default function MapPage() {
   const { events, status, error, selectedEvent, setSelectedEvent } = useAppContext()
-  const [layers, setLayers] = useState<Set<LayerKey>>(new Set(['events']))
-  const [layerPanelOpen, setLayerPanelOpen] = useState(true)
-
-  const toggle = (k: LayerKey) =>
-    setLayers(prev => { const n = new Set(prev); n.has(k) ? n.delete(k) : n.add(k); return n })
+  const [showEvents,   setShowEvents]   = useState(true)
+  const [layerOpen,    setLayerOpen]    = useState(true)
+  const [eventsOpen,   setEventsOpen]   = useState(true)
 
   return (
-    <div style={{ height: '100%', display: 'flex', overflow: 'hidden', position: 'relative' }}>
+    <div style={{ height: '100%', display: 'flex', overflow: 'hidden' }}>
 
-      {/* ── Map — takes full space ── */}
+      {/* ── Map ── */}
       <div style={{ flex: 1, minWidth: 0, position: 'relative' }}>
         <MapPanel
-          events={layers.has('events') ? events : []}
+          events={showEvents ? events : []}
           selectedEvent={selectedEvent}
           onSelect={setSelectedEvent}
           status={status}
           error={error}
         />
 
-        {/* Floating layer control panel */}
+        {/* Single unified floating left panel — avoids panel-on-panel collision */}
         <div style={{
-          position: 'absolute', top: 12, left: 12, zIndex: 600,
-          background: 'rgba(8,15,28,0.90)',
+          position: 'absolute', top: 14, left: 14, zIndex: 600,
+          background: 'rgba(12,12,12,0.93)',
           border: '1px solid var(--b2)',
-          borderRadius: 'var(--r-md)',
+          borderRadius: 10,
+          backdropFilter: 'blur(14px)',
+          boxShadow: 'var(--sh-lg)',
+          width: 210,
+          maxHeight: 'calc(100% - 80px)',
+          display: 'flex',
+          flexDirection: 'column',
           overflow: 'hidden',
-          backdropFilter: 'blur(10px)',
-          minWidth: 180,
-          boxShadow: 'var(--sh-md)',
         }}>
-          {/* Panel header */}
+
+          {/* ── Section 1: Layers ── */}
           <div
-            onClick={() => setLayerPanelOpen(o => !o)}
+            onClick={() => setLayerOpen(o => !o)}
             style={{
-              padding: '7px 10px',
+              padding: '9px 12px',
               display: 'flex', alignItems: 'center', justifyContent: 'space-between',
               cursor: 'pointer',
-              borderBottom: layerPanelOpen ? '1px solid var(--b1)' : 'none',
+              borderBottom: '1px solid var(--b1)',
+              flexShrink: 0,
             }}
           >
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <Layers size={11} color="var(--t3)"/>
-              <span style={{ fontSize: 8, fontWeight: 700, letterSpacing: '0.14em', color: 'var(--t3)', fontFamily: 'var(--font-mono)' }}>
-                MAP LAYERS
-              </span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+              <Layers size={13} color="var(--t3)"/>
+              <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--t2)' }}>Map Layers</span>
             </div>
-            {layerPanelOpen ? <ChevronUp size={10} color="var(--t4)"/> : <ChevronDown size={10} color="var(--t4)"/>}
+            {layerOpen
+              ? <ChevronUp size={11} color="var(--t4)"/>
+              : <ChevronDown size={11} color="var(--t4)"/>}
           </div>
 
-          {layerPanelOpen && (
-            <div style={{ padding: '6px 8px 8px' }}>
-              <LayerToggle
-                label="Thermal Events" active={layers.has('events')}
-                color="#F59E0B" count={events.length}
-                onClick={() => toggle('events')}/>
+          {layerOpen && (
+            <div style={{ padding: '7px 10px 9px', borderBottom: '1px solid var(--b1)', flexShrink: 0 }}>
+              {/* Fire events toggle */}
+              <div
+                onClick={() => setShowEvents(v => !v)}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 8,
+                  padding: '5px 8px', cursor: 'pointer', borderRadius: 6,
+                  background: showEvents ? 'rgba(245,158,11,0.10)' : 'transparent',
+                  border: `1px solid ${showEvents ? 'rgba(245,158,11,0.28)' : 'transparent'}`,
+                  transition: 'all var(--ease)',
+                  marginBottom: 2,
+                }}
+              >
+                <div style={{
+                  width: 11, height: 11, borderRadius: 3, flexShrink: 0,
+                  background: showEvents ? 'var(--amber)' : 'transparent',
+                  border: `1.5px solid var(--amber)`,
+                  boxShadow: showEvents ? '0 0 6px rgba(245,158,11,0.5)' : 'none',
+                  transition: 'all var(--ease)',
+                }}/>
+                <span style={{ fontSize: 13, color: showEvents ? 'var(--t1)' : 'var(--t4)', flex: 1 }}>
+                  Fire Events
+                </span>
+                <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: showEvents ? 'var(--amber)' : 'var(--t4)' }}>
+                  {events.length.toLocaleString()}
+                </span>
+              </div>
+
               {/* Pending layers */}
               <div style={{ opacity: 0.32, pointerEvents: 'none' }}>
-                <LayerToggle label="Facility Overlay" active={false} color="var(--sky)" onClick={() => {}}/>
-                <LayerToggle label="Satellite Coverage" active={false} color="var(--violet)" onClick={() => {}}/>
-              </div>
-              <div style={{
-                fontSize: 7.5, color: 'var(--t4)', fontFamily: 'var(--font-mono)',
-                marginTop: 4, paddingTop: 5,
-                borderTop: '1px solid var(--b1)',
-                letterSpacing: '0.06em',
-              }}>
-                OSM / coverage layers pending
+                {['Facility Overlay', 'Satellite Coverage'].map(l => (
+                  <div key={l} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 8px' }}>
+                    <div style={{ width: 11, height: 11, borderRadius: 3, border: '1.5px solid var(--b2)', flexShrink: 0 }}/>
+                    <span style={{ fontSize: 12, color: 'var(--t4)', flex: 1 }}>{l}</span>
+                    <span style={{ fontSize: 10, color: 'var(--t4)' }}>Soon</span>
+                  </div>
+                ))}
               </div>
             </div>
           )}
-        </div>
 
-        {/* Floating mini event list */}
-        <div style={{
-          position: 'absolute', top: 12, left: 12 + 190 + 8, zIndex: 600,
-          background: 'rgba(8,15,28,0.88)',
-          border: '1px solid var(--b2)',
-          borderRadius: 'var(--r-md)',
-          backdropFilter: 'blur(10px)',
-          boxShadow: 'var(--sh-md)',
-          width: 210,
-          maxHeight: 340,
-          display: 'flex', flexDirection: 'column',
-          overflow: 'hidden',
-        }}>
-          <div style={{
-            padding: '7px 10px',
-            borderBottom: '1px solid var(--b1)',
-            display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-            flexShrink: 0,
-          }}>
-            <span style={{ fontSize: 8, fontWeight: 700, letterSpacing: '0.14em', color: 'var(--t3)', fontFamily: 'var(--font-mono)' }}>
-              EVENTS
-            </span>
-            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 9, color: 'var(--cyan)' }}>
-              {events.length.toLocaleString()}
-            </span>
+          {/* ── Section 2: Event list ── */}
+          <div
+            onClick={() => setEventsOpen(o => !o)}
+            style={{
+              padding: '8px 12px',
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              cursor: 'pointer',
+              borderBottom: eventsOpen ? '1px solid var(--b1)' : 'none',
+              flexShrink: 0,
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+              <List size={13} color="var(--t3)"/>
+              <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--t2)' }}>Events</span>
+              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--cyan)' }}>
+                {events.length.toLocaleString()}
+              </span>
+            </div>
+            {eventsOpen
+              ? <ChevronUp size={11} color="var(--t4)"/>
+              : <ChevronDown size={11} color="var(--t4)"/>}
           </div>
-          <div style={{ overflowY: 'auto', flex: 1 }}>
-            {events.slice(0, 200).map(ev => {
-              const sel = selectedEvent?.event_id === ev.event_id
-              const fc = frpColor(ev.frp)
-              return (
-                <div
-                  key={ev.event_id ?? `${ev.latitude},${ev.longitude}`}
-                  onClick={() => setSelectedEvent(ev)}
-                  style={{
-                    display: 'flex', alignItems: 'center', gap: 7,
-                    padding: '5px 10px',
-                    cursor: 'pointer',
-                    background: sel ? 'var(--d7)' : 'transparent',
-                    borderLeft: `2px solid ${sel ? 'var(--cyan)' : 'transparent'}`,
-                    borderBottom: '1px solid var(--b0)',
-                    transition: 'background var(--ease)',
-                  }}
-                  onMouseEnter={e => { if (!sel) (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.04)' }}
-                  onMouseLeave={e => { if (!sel) (e.currentTarget as HTMLElement).style.background = 'transparent' }}
-                >
-                  <div style={{ width: 6, height: 6, borderRadius: '50%', background: fc, flexShrink: 0, boxShadow: `0 0 4px ${fc}60` }}/>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{
-                      fontFamily: 'var(--font-mono)', fontSize: 8.5,
-                      color: sel ? 'var(--cyan)' : 'var(--t2)',
-                      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                    }}>
-                      {ev.event_id ?? '—'}
-                    </div>
-                    <div style={{ fontFamily: 'var(--font-mono)', fontSize: 8, color: 'var(--t4)' }}>
-                      {ev.frp != null ? `${ev.frp.toLocaleString()} MW` : ev.satellite ?? '—'}
+
+          {eventsOpen && (
+            <div style={{ overflowY: 'auto', flex: 1, minHeight: 0 }}>
+              {events.length === 0 && (
+                <div style={{ padding: '12px', fontSize: 12, color: 'var(--t4)', textAlign: 'center' }}>
+                  No events loaded
+                </div>
+              )}
+              {events.slice(0, 300).map(ev => {
+                const sel = selectedEvent?.event_id === ev.event_id
+                const fc  = frpColor(ev.frp)
+                return (
+                  <div
+                    key={ev.event_id ?? `${ev.latitude},${ev.longitude}`}
+                    onClick={() => setSelectedEvent(ev)}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 8,
+                      padding: '5px 12px', cursor: 'pointer',
+                      background: sel ? 'rgba(0,229,220,0.09)' : 'transparent',
+                      borderLeft: `2px solid ${sel ? 'var(--cyan)' : 'transparent'}`,
+                      borderBottom: '1px solid var(--b0)',
+                      transition: 'background var(--ease)',
+                    }}
+                    onMouseEnter={e => { if (!sel) (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.04)' }}
+                    onMouseLeave={e => { if (!sel) (e.currentTarget as HTMLElement).style.background = 'transparent' }}
+                  >
+                    <div style={{ width: 8, height: 8, borderRadius: '50%', background: fc, flexShrink: 0, boxShadow: `0 0 5px ${fc}70` }}/>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{
+                        fontFamily: 'var(--font-mono)', fontSize: 11,
+                        color: sel ? 'var(--cyan)' : 'var(--t2)',
+                        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                      }}>
+                        {ev.event_id ?? '\u2014'}
+                      </div>
+                      <div style={{ fontSize: 11, color: 'var(--t4)' }}>
+                        {ev.frp != null ? `${ev.frp.toLocaleString()} MW` : (ev.satellite ?? '\u2014')}
+                      </div>
                     </div>
                   </div>
-                </div>
-              )
-            })}
-          </div>
+                )
+              })}
+            </div>
+          )}
         </div>
       </div>
 
-      {/* ── Right: intelligence panel ── */}
+      {/* ── Right: Inspector ── */}
       <div style={{
-        width: 272, minWidth: 272, flexShrink: 0,
-        background: 'var(--d3)',
-        borderLeft: '1px solid var(--b1)',
-        display: 'flex', flexDirection: 'column',
-        overflow: 'hidden',
+        width: 300, minWidth: 300, flexShrink: 0,
+        background: 'var(--d3)', borderLeft: '1px solid var(--b1)',
+        display: 'flex', flexDirection: 'column', overflow: 'hidden',
       }}>
         <div style={{
-          padding: '7px 14px',
-          borderBottom: '1px solid var(--b1)',
-          flexShrink: 0,
+          padding: '10px 16px', borderBottom: '1px solid var(--b1)',
           background: 'var(--d4)',
           display: 'flex', justifyContent: 'space-between', alignItems: 'center',
         }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <div style={{ width: 2, height: 12, background: 'var(--cyan)', borderRadius: 1, boxShadow: '0 0 4px var(--cyan)' }}/>
-            <span style={{ fontSize: 8, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.16em', color: 'var(--t3)', fontFamily: 'var(--font-mono)' }}>
-              Event Intelligence
-            </span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div style={{ width: 3, height: 16, background: 'var(--cyan)', borderRadius: 2, boxShadow: '0 0 6px var(--cyan)' }}/>
+            <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--t2)' }}>Fire Details</span>
           </div>
           {selectedEvent && (
             <span style={{
-              fontFamily: 'var(--font-mono)', fontSize: 7.5,
-              color: 'var(--t4)',
+              fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--t4)',
               background: 'var(--d5)', border: '1px solid var(--b2)',
-              borderRadius: 'var(--r-xs)', padding: '1px 6px',
-              maxWidth: 100, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              borderRadius: 4, padding: '1px 7px',
+              maxWidth: 110, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
             }}>
               {selectedEvent.event_id}
             </span>

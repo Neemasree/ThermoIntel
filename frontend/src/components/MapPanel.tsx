@@ -1,11 +1,10 @@
-/**
- * MapPanel — premium thermal event visualization.
- * OSM tiles with night-mode filter. Real FRP-driven markers.
- * Selected event gets dual pulse halo. Intelligence tooltip.
- */
-import React from 'react'
-import { MapContainer, TileLayer, CircleMarker, Tooltip, ZoomControl } from 'react-leaflet'
+﻿import React, { useEffect, useRef } from 'react'
+import { MapContainer, TileLayer, ZoomControl, useMap } from 'react-leaflet'
 import 'leaflet/dist/leaflet.css'
+import 'leaflet.markercluster/dist/MarkerCluster.css'
+import 'leaflet.markercluster/dist/MarkerCluster.Default.css'
+import L from 'leaflet'
+import 'leaflet.markercluster'
 import type { ApiThermalEvent } from '../types/api'
 import { frpColor, markerRadius, formatAcqTime, confidenceLabel, frpTier } from '../utils/eventUtils'
 
@@ -18,21 +17,135 @@ interface Props {
   hideOverlays?: boolean
 }
 
-const INTENSITY_LEGEND = [
-  { label: '> 1000 MW',  color: '#DC2626', tier: 'EXTREME'  },
-  { label: '500 – 1000', color: '#EF4444', tier: 'CRITICAL' },
-  { label: '200 – 500',  color: '#F97316', tier: 'HIGH'     },
-  { label: '50 – 200',   color: '#F59E0B', tier: 'MODERATE' },
-  { label: '< 50 MW',    color: '#38BDF8', tier: 'LOW'      },
+const LEGEND = [
+  { label: '> 1000 MW',  color: '#DC2626', tier: 'Extreme'  },
+  { label: '500\u20131000', color: '#EF4444', tier: 'Critical' },
+  { label: '200\u2013500',  color: '#F97316', tier: 'High'     },
+  { label: '50\u2013200',   color: '#F59E0B', tier: 'Moderate' },
+  { label: '< 50 MW',    color: '#38BDF8', tier: 'Low'      },
 ]
 
-function frpOpacity(frp: number | null): number {
-  if (frp == null) return 0.45
-  if (frp > 1000)  return 0.95
-  if (frp > 500)   return 0.88
-  if (frp > 200)   return 0.80
-  if (frp > 50)    return 0.72
-  return 0.58
+/** Pick cluster color based on max FRP inside */
+function clusterColor(maxFrp: number | null): string {
+  if (maxFrp == null) return '#38BDF8'
+  if (maxFrp > 1000)  return '#DC2626'
+  if (maxFrp > 500)   return '#EF4444'
+  if (maxFrp > 200)   return '#F97316'
+  if (maxFrp > 50)    return '#F59E0B'
+  return '#38BDF8'
+}
+
+/** Inner component that manages the MarkerClusterGroup layer */
+function ClusterLayer({ events, selectedEvent, onSelect }: {
+  events: ApiThermalEvent[]
+  selectedEvent: ApiThermalEvent | null
+  onSelect: (e: ApiThermalEvent) => void
+}) {
+  const map = useMap()
+  const clusterRef = useRef<L.MarkerClusterGroup | null>(null)
+
+  useEffect(() => {
+    // Create cluster group with custom icon factory
+    const group = (L as unknown as {
+      markerClusterGroup: (opts: unknown) => L.MarkerClusterGroup
+    }).markerClusterGroup({
+      maxClusterRadius: 40,
+      disableClusteringAtZoom: 7,
+      spiderfyOnMaxZoom: true,
+      showCoverageOnHover: false,
+      zoomToBoundsOnClick: true,
+      iconCreateFunction: (cluster: L.MarkerCluster) => {
+        const children = cluster.getAllChildMarkers()
+        // Find max FRP in cluster
+        let maxFrp: number | null = null
+        for (const m of children) {
+          const frp = (m as unknown as { _frp?: number | null })._frp ?? null
+          if (frp != null && (maxFrp == null || frp > maxFrp)) maxFrp = frp
+        }
+        const count = children.length
+        const color = clusterColor(maxFrp)
+        // Size scales with cluster size
+        const size = count > 500 ? 48 : count > 100 ? 42 : count > 20 ? 36 : 30
+        const html = `
+          <div style="
+            width:${size}px; height:${size}px;
+            border-radius:50%;
+            background:${color}22;
+            border:2px solid ${color};
+            box-shadow:0 0 12px ${color}60, 0 0 4px ${color}40;
+            display:flex; align-items:center; justify-content:center;
+            font-family:'JetBrains Mono',monospace;
+            font-size:${count > 999 ? 9 : 11}px;
+            font-weight:700;
+            color:${color};
+            position:relative;
+          ">
+            ${count > 9999 ? Math.round(count/1000)+'k' : count.toLocaleString()}
+          </div>`
+        return L.divIcon({ html, className: '', iconSize: [size, size], iconAnchor: [size/2, size/2] })
+      },
+    })
+
+    clusterRef.current = group
+    map.addLayer(group)
+
+    return () => {
+      map.removeLayer(group)
+      clusterRef.current = null
+    }
+  }, [map])
+
+  useEffect(() => {
+    const group = clusterRef.current
+    if (!group) return
+
+    group.clearLayers()
+
+    for (const ev of events) {
+      const sel   = selectedEvent?.event_id === ev.event_id
+      const color = frpColor(ev.frp)
+      const r     = markerRadius(ev.frp)
+
+      const marker = L.circleMarker([ev.latitude, ev.longitude], {
+        radius:      sel ? r + 5 : r,
+        color:       sel ? '#FFFFFF' : color,
+        fillColor:   color,
+        fillOpacity: sel ? 1.0 : 0.88,
+        weight:      sel ? 2.5 : 1.2,
+        opacity:     1,
+      })
+
+      // Attach FRP for cluster icon factory
+      ;(marker as unknown as { _frp: number | null })._frp = ev.frp ?? null
+
+      // Tooltip
+      const tooltipContent = `
+        <div style="min-width:190px;font-family:var(--font-sans)">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid rgba(255,255,255,0.10)">
+            <div style="width:10px;height:10px;border-radius:50%;background:${color};box-shadow:0 0 8px ${color};flex-shrink:0"></div>
+            <div style="font-family:var(--font-mono);font-size:12px;font-weight:700;color:var(--t1);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:155px">${ev.event_id ?? 'Unknown'}</div>
+          </div>
+          <div style="display:flex;justify-content:space-between;padding:3px 0"><span style="font-size:12px;color:var(--t3)">Fire Power</span><span style="font-size:13px;font-family:var(--font-mono);font-weight:600;color:${color}">${ev.frp != null ? ev.frp.toLocaleString()+' MW' : '\u2014'}</span></div>
+          <div style="display:flex;justify-content:space-between;padding:3px 0"><span style="font-size:12px;color:var(--t3)">Tier</span><span style="font-size:13px;font-family:var(--font-mono);font-weight:600;color:${color}">${frpTier(ev.frp)}</span></div>
+          <div style="display:flex;justify-content:space-between;padding:3px 0"><span style="font-size:12px;color:var(--t3)">Satellite</span><span style="font-size:13px;font-family:var(--font-mono);color:var(--t2)">${ev.satellite ?? '\u2014'}</span></div>
+          <div style="display:flex;justify-content:space-between;padding:3px 0"><span style="font-size:12px;color:var(--t3)">Confidence</span><span style="font-size:13px;font-family:var(--font-mono);color:var(--t2)">${confidenceLabel(ev.confidence)}</span></div>
+          <div style="display:flex;justify-content:space-between;padding:3px 0"><span style="font-size:12px;color:var(--t3)">Time</span><span style="font-size:13px;font-family:var(--font-mono);color:var(--t2)">${formatAcqTime(ev.acquisition_time)}</span></div>
+          <div style="margin-top:8px;padding-top:7px;border-top:1px solid rgba(255,255,255,0.07);font-size:11px;color:var(--t4);text-align:center">Click to inspect</div>
+        </div>`
+
+      marker.bindTooltip(tooltipContent, {
+        direction: 'right',
+        offset: [14, 0],
+        opacity: 1,
+        className: '',
+      })
+
+      marker.on('click', () => onSelect(ev))
+      group.addLayer(marker)
+    }
+  }, [events, selectedEvent, onSelect])
+
+  return null
 }
 
 export default function MapPanel({ events, selectedEvent, onSelect, status, error, hideOverlays }: Props) {
@@ -41,205 +154,95 @@ export default function MapPanel({ events, selectedEvent, onSelect, status, erro
       <MapContainer
         center={[20, 10]}
         zoom={2}
-        style={{ height: '100%', width: '100%', background: '#03070E' }}
+        style={{ height: '100%', width: '100%', background: '#0a0a0a' }}
         zoomControl={false}
-        attributionControl={true}
       >
-        <ZoomControl position="bottomleft" />
-        {/* OSM with strong night-mode CSS filter applied via .leaflet-tile-pane in CSS */}
+        <ZoomControl position="bottomleft"/>
+        {/* CartoDB Dark Matter — free, no API key, proper dark basemap */}
         <TileLayer
-          url="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
-          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-          maxZoom={19}
+          url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
+          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>'
+          subdomains="abcd"
+          maxZoom={20}
           keepBuffer={4}
         />
-
-        {status !== 'loading' && events.map(ev => {
-          const sel = selectedEvent?.event_id === ev.event_id
-          const color = frpColor(ev.frp)
-          const r = markerRadius(ev.frp)
-          const opacity = frpOpacity(ev.frp)
-
-          return (
-            <CircleMarker
-              key={ev.event_id ?? `${ev.latitude},${ev.longitude}`}
-              center={[ev.latitude, ev.longitude]}
-              radius={sel ? r + 4 : r}
-              pathOptions={{
-                color: sel ? '#ffffff' : color,
-                fillColor: color,
-                fillOpacity: sel ? 1.0 : opacity,
-                weight: sel ? 2 : 0.8,
-                opacity: 1,
-              }}
-              eventHandlers={{ click: () => onSelect(ev) }}
-            >
-              <Tooltip offset={[12, 0]} direction="right">
-                <div style={{ minWidth: 180 }}>
-                  {/* Header */}
-                  <div style={{
-                    display: 'flex', alignItems: 'center', gap: 8,
-                    marginBottom: 8, paddingBottom: 7,
-                    borderBottom: '1px solid rgba(255,255,255,0.08)',
-                  }}>
-                    <div style={{
-                      width: 8, height: 8, borderRadius: '50%',
-                      background: color,
-                      boxShadow: `0 0 8px ${color}`,
-                      flexShrink: 0,
-                    }}/>
-                    <div style={{
-                      fontFamily: 'var(--font-mono)', fontSize: 10,
-                      fontWeight: 600, color: 'var(--t1)',
-                      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                      maxWidth: 150,
-                    }}>
-                      {ev.event_id ?? 'UNKNOWN'}
-                    </div>
-                  </div>
-                  {/* Fields */}
-                  {[
-                    { l: 'FRP',       v: ev.frp != null ? `${ev.frp.toLocaleString()} MW` : '—', accent: color },
-                    { l: 'TIER',      v: frpTier(ev.frp),     accent: color },
-                    { l: 'SATELLITE', v: ev.satellite ?? '—' },
-                    { l: 'CONF',      v: confidenceLabel(ev.confidence) },
-                    { l: 'TIME',      v: formatAcqTime(ev.acquisition_time) },
-                    { l: 'D/N',       v: ev.daynight === 'D' ? 'Daytime' : ev.daynight === 'N' ? 'Nighttime' : '—' },
-                  ].map(({ l, v, accent }) => (
-                    <div key={l} style={{
-                      display: 'flex', justifyContent: 'space-between',
-                      alignItems: 'baseline', gap: 10,
-                      padding: '2px 0',
-                    }}>
-                      <span style={{ fontSize: 9, color: 'var(--t4)', fontFamily: 'var(--font-mono)', letterSpacing: '0.08em' }}>{l}</span>
-                      <span style={{ fontSize: 11, fontFamily: 'var(--font-mono)', fontWeight: 600, color: accent ?? 'var(--t2)' }}>{v}</span>
-                    </div>
-                  ))}
-                  <div style={{
-                    marginTop: 6, paddingTop: 5,
-                    borderTop: '1px solid rgba(255,255,255,0.06)',
-                    fontFamily: 'var(--font-mono)', fontSize: 9, color: 'var(--t4)',
-                    textAlign: 'center', letterSpacing: '0.08em',
-                  }}>
-                    CLICK TO INSPECT ›
-                  </div>
-                </div>
-              </Tooltip>
-            </CircleMarker>
-          )
-        })}
+        {status !== 'loading' && (
+          <ClusterLayer
+            events={events}
+            selectedEvent={selectedEvent}
+            onSelect={onSelect}
+          />
+        )}
       </MapContainer>
 
-      {/* ── Loading overlay ── */}
+      {/* Loading */}
       {status === 'loading' && (
         <div style={{
           position: 'absolute', inset: 0, zIndex: 1000,
           display: 'flex', alignItems: 'center', justifyContent: 'center',
-          background: 'rgba(3,7,14,0.75)',
-          backdropFilter: 'blur(4px)',
+          background: 'rgba(0,0,0,0.65)', backdropFilter: 'blur(4px)',
         }}>
           <div style={{ textAlign: 'center' }}>
-            {/* Orbital spinner */}
-            <div style={{ position: 'relative', width: 44, height: 44, margin: '0 auto 14px' }}>
-              <svg viewBox="0 0 44 44" width="44" height="44" style={{ animation: 'spin 1.6s linear infinite' }}>
-                <circle cx="22" cy="22" r="18" fill="none" stroke="rgba(29,232,227,0.15)" strokeWidth="1.5"/>
-                <circle cx="22" cy="22" r="18" fill="none" stroke="var(--cyan)" strokeWidth="1.5"
-                  strokeDasharray="28 85" strokeLinecap="round"/>
+            <div style={{ position: 'relative', width: 48, height: 48, margin: '0 auto 16px' }}>
+              <svg viewBox="0 0 48 48" width="48" height="48" style={{ animation: 'spin 1.6s linear infinite' }}>
+                <circle cx="24" cy="24" r="20" fill="none" stroke="rgba(0,229,220,0.15)" strokeWidth="2"/>
+                <circle cx="24" cy="24" r="20" fill="none" stroke="#00E5DC" strokeWidth="2" strokeDasharray="30 95" strokeLinecap="round"/>
               </svg>
-              <div style={{
-                position: 'absolute', inset: 0,
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-              }}>
-                <div style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--amber)', animation: 'thermalPulse 1.2s ease-in-out infinite' }}/>
+              <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <div style={{ width: 7, height: 7, borderRadius: '50%', background: '#F59E0B', animation: 'thermalPulse 1.2s ease-in-out infinite' }}/>
               </div>
             </div>
-            <div style={{ fontSize: 10, fontFamily: 'var(--font-mono)', letterSpacing: '0.14em', color: 'var(--t3)' }}>
-              ACQUIRING THERMAL FEED
-            </div>
+            <div style={{ fontSize: 14, color: 'var(--t3)', fontWeight: 500 }}>Loading thermal events\u2026</div>
           </div>
         </div>
       )}
 
-      {/* ── Error banner ── */}
+      {/* Error */}
       {status === 'error' && !hideOverlays && (
         <div style={{
-          position: 'absolute', top: 14, left: '50%', transform: 'translateX(-50%)',
-          zIndex: 1000,
-          background: 'rgba(8,15,28,0.92)',
-          border: '1px solid var(--err-b)',
-          borderRadius: 'var(--r-md)',
-          padding: '9px 16px',
-          display: 'flex', alignItems: 'center', gap: 10,
-          fontSize: 11, color: 'var(--err)',
-          boxShadow: 'var(--sh-lg)',
-          backdropFilter: 'blur(8px)',
-          maxWidth: 420,
+          position: 'absolute', top: 16, left: '50%', transform: 'translateX(-50%)',
+          zIndex: 1000, background: 'rgba(12,12,12,0.94)',
+          border: '1px solid var(--err-b)', borderRadius: 10,
+          padding: '12px 20px', display: 'flex', alignItems: 'center', gap: 12,
+          boxShadow: 'var(--sh-lg)', backdropFilter: 'blur(8px)', maxWidth: 440,
         }}>
-          <div style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--err)', flexShrink: 0 }}/>
+          <div style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--err)', flexShrink: 0 }}/>
           <div>
-            <div style={{ fontWeight: 600, fontFamily: 'var(--font-mono)', letterSpacing: '0.06em', marginBottom: 1 }}>
-              DATA CONNECTION LOST
-            </div>
-            <div style={{ fontSize: 10, color: 'var(--t3)', fontFamily: 'var(--font-sans)' }}>
-              Unable to retrieve live ThermalWatch telemetry
-            </div>
+            <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--err)', marginBottom: 2 }}>Connection lost</div>
+            <div style={{ fontSize: 12, color: 'var(--t3)' }}>Unable to load thermal event data</div>
           </div>
         </div>
       )}
 
-      {/* ── Intensity legend ── */}
+      {/* Legend */}
       {!hideOverlays && (
         <div style={{
-          position: 'absolute', bottom: 40, right: 12, zIndex: 500,
-          background: 'rgba(8,15,28,0.88)',
-          border: '1px solid var(--b2)',
-          borderRadius: 'var(--r-md)',
-          padding: '10px 13px',
-          boxShadow: 'var(--sh-md)',
-          backdropFilter: 'blur(8px)',
+          position: 'absolute', bottom: 44, right: 14, zIndex: 500,
+          background: 'rgba(12,12,12,0.92)', border: '1px solid var(--b2)',
+          borderRadius: 10, padding: '12px 14px',
+          boxShadow: 'var(--sh-md)', backdropFilter: 'blur(8px)',
+          minWidth: 170,
         }}>
           <div style={{
-            fontSize: 7.5, fontWeight: 700,
-            textTransform: 'uppercase', letterSpacing: '0.14em',
-            color: 'var(--t4)', marginBottom: 8,
-            fontFamily: 'var(--font-mono)',
-            borderBottom: '1px solid var(--b1)',
-            paddingBottom: 5,
+            fontSize: 11, fontWeight: 700, textTransform: 'uppercase',
+            letterSpacing: '0.12em', color: 'var(--t3)', marginBottom: 10,
+            borderBottom: '1px solid var(--b1)', paddingBottom: 7,
           }}>
-            FRP Intensity
+            Fire Intensity (FRP)
           </div>
-          {INTENSITY_LEGEND.map(({ label, color, tier }) => (
-            <div key={tier} style={{
-              display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4,
-            }}>
-              <div style={{
-                width: 8, height: 8, borderRadius: '50%',
-                background: color,
-                boxShadow: `0 0 5px ${color}60`,
-                flexShrink: 0,
-              }}/>
-              <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 9, fontFamily: 'var(--font-mono)', color: 'var(--t2)', letterSpacing: '0.04em' }}>{label}</div>
-              </div>
-              <div style={{
-                fontSize: 7, fontWeight: 700,
-                fontFamily: 'var(--font-mono)',
-                letterSpacing: '0.10em',
-                color: color,
-                opacity: 0.75,
-              }}>
-                {tier}
-              </div>
+          {LEGEND.map(({ label, color, tier }) => (
+            <div key={tier} style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 5 }}>
+              <div style={{ width: 10, height: 10, borderRadius: '50%', background: color, boxShadow: `0 0 6px ${color}80`, flexShrink: 0 }}/>
+              <span style={{ fontSize: 12, color: 'var(--t2)', flex: 1 }}>{label}</span>
+              <span style={{ fontSize: 11, fontWeight: 600, color }}>{tier}</span>
             </div>
           ))}
-          {/* Event count badge */}
           <div style={{
-            marginTop: 7, paddingTop: 6,
-            borderTop: '1px solid var(--b1)',
+            marginTop: 8, paddingTop: 8, borderTop: '1px solid var(--b1)',
             display: 'flex', justifyContent: 'space-between', alignItems: 'center',
           }}>
-            <span style={{ fontSize: 8, color: 'var(--t4)', fontFamily: 'var(--font-mono)' }}>EVENTS</span>
-            <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--cyan)', fontFamily: 'var(--font-mono)' }}>
+            <span style={{ fontSize: 12, color: 'var(--t3)' }}>Shown</span>
+            <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--cyan)', fontFamily: 'var(--font-mono)' }}>
               {events.length.toLocaleString()}
             </span>
           </div>

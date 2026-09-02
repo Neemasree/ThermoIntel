@@ -15,9 +15,11 @@
     "vite": "^8.2.2"
   },
   "dependencies": {
+    "@types/leaflet.markercluster": "1.5.4",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.5",
     "leaflet": "^1.9.4",
+    "leaflet.markercluster": "1.5.3",
     "lucide-react": "^1.39.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",

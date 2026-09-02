@@ -1,9 +1,8 @@
 import React, { useState, useEffect, useContext } from 'react'
 import { useLocation } from 'react-router-dom'
-import { RefreshCw, AlertTriangle, Wifi, WifiOff } from 'lucide-react'
+import { RefreshCw, WifiOff, Wifi } from 'lucide-react'
 import { AppContext } from '../App'
 
-/* Live UTC clock */
 function useUtcClock() {
   const fmt = () => new Date().toISOString().slice(11, 19)
   const [t, setT] = useState(fmt)
@@ -14,190 +13,100 @@ function useUtcClock() {
   return t
 }
 
-const PAGE_META: Record<string, { module: string; sub: string }> = {
-  '/':           { module: 'GLOBAL MAP',      sub: 'Thermal Event Visualization' },
-  '/map':        { module: 'GLOBAL MAP',      sub: 'Thermal Event Visualization' },
-  '/risk':       { module: 'RISK',            sub: 'Event Intelligence Assessment' },
-  '/analytics':  { module: 'ANALYTICS',       sub: 'Detection Statistics' },
-  '/facilities': { module: 'FACILITIES',      sub: 'Infrastructure Context' },
-  '/history':    { module: 'OBSERVATION LOG', sub: 'Detection Archive' },
-  '/terminal':   { module: 'TERMINAL',        sub: 'Analyst Interface' },
-}
-
-/* Telemetry segment */
-function TelSeg({ label, value, accent }: {
-  label: string; value: string; accent?: string
-}) {
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 1, minWidth: 'max-content' }}>
-      <span style={{
-        fontSize: 7, fontWeight: 700,
-        letterSpacing: '0.14em',
-        textTransform: 'uppercase',
-        color: 'var(--t4)',
-        fontFamily: 'var(--font-mono)',
-      }}>
-        {label}
-      </span>
-      <span style={{
-        fontSize: 11, fontWeight: 600,
-        fontFamily: 'var(--font-mono)',
-        color: accent ?? 'var(--t2)',
-        fontVariantNumeric: 'tabular-nums',
-        letterSpacing: '0.04em',
-      }}>
-        {value}
-      </span>
-    </div>
-  )
+const PAGE_NAMES: Record<string, string> = {
+  '/':           'Global Map',
+  '/map':        'Global Map',
+  '/risk':       'Risk Assessment',
+  '/analytics':  'Analytics',
+  '/facilities': 'Facilities',
+  '/history':    'Observation Log',
+  '/terminal':   'Terminal',
 }
 
 export default function Topbar() {
   const { pathname } = useLocation()
   const utc = useUtcClock()
-  const { status, lastUpdatedAt, refresh, pipelineStatus, events, statistics } = useContext(AppContext)
+  const { status, refresh, pipelineStatus, events, statistics } = useContext(AppContext)
 
-  const meta = PAGE_META[pathname] ?? { module: 'THERMALWATCH', sub: 'Satellite Thermal Intelligence' }
   const pipelineOk = pipelineStatus?.status === 'ok'
-
   const lastSync = statistics?.last_sync_at
-    ? new Date(statistics.last_sync_at).toISOString().slice(11, 19)
+    ? new Date(statistics.last_sync_at).toISOString().slice(11, 19) + ' UTC'
     : null
 
   return (
     <header style={{
-      height: 'var(--topbar-h)',
-      minHeight: 'var(--topbar-h)',
-      background: 'var(--d2)',
-      borderBottom: '1px solid var(--b1)',
-      display: 'flex',
-      alignItems: 'center',
-      padding: '0 16px',
-      zIndex: 50,
-      flexShrink: 0,
-      position: 'relative',
-      gap: 0,
+      height: 'var(--topbar-h)', minHeight: 'var(--topbar-h)',
+      background: 'var(--d2)', borderBottom: '1px solid var(--b1)',
+      display: 'flex', alignItems: 'center',
+      padding: '0 20px', zIndex: 50, flexShrink: 0, position: 'relative',
     }}>
-      {/* Gradient top accent */}
-      <div style={{
-        position: 'absolute', top: 0, left: 0, right: 0, height: 1,
-        background: 'linear-gradient(90deg, var(--cyan) 0%, rgba(29,232,227,0.4) 40%, var(--violet) 80%, transparent 100%)',
-        opacity: 0.6,
-      }}/>
+      {/* Top accent line */}
+      <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 2, background: 'linear-gradient(90deg, var(--cyan) 0%, rgba(0,229,220,0.3) 50%, transparent 100%)', opacity: 0.7 }}/>
 
-      {/* Module identification */}
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
-        <span style={{
-          fontSize: 11, fontWeight: 800,
-          letterSpacing: '0.14em',
-          color: 'var(--t1)',
-          fontFamily: 'var(--font-mono)',
-        }}>
-          {meta.module}
-        </span>
-        <span style={{
-          fontSize: 9, color: 'var(--t4)',
-          fontFamily: 'var(--font-sans)',
-          letterSpacing: '0.01em',
-        }}>
-          {meta.sub}
-        </span>
-      </div>
+      {/* Page name */}
+      <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--t1)', letterSpacing: '-0.01em' }}>
+        {PAGE_NAMES[pathname] ?? 'ThermalWatch'}
+      </span>
 
       <div style={{ flex: 1 }}/>
 
-      {/* ── Telemetry row ── */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+      {/* Right side */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
 
-        {/* Connection / pipeline status */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          {status === 'loading' && (
-            <div style={{
-              width: 12, height: 12,
-              border: '1.5px solid var(--sky)',
-              borderTopColor: 'transparent',
-              borderRadius: '50%',
-              animation: 'spin 0.8s linear infinite',
-              flexShrink: 0,
-            }}/>
-          )}
-          {(status === 'live' || status === 'empty') && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-              <span className="live-dot" style={{ width: 6, height: 6 }}/>
-              <span style={{
-                fontFamily: 'var(--font-mono)', fontSize: 9,
-                fontWeight: 700, letterSpacing: '0.10em',
-                color: 'var(--cyan)',
-              }}>
-                LIVE
-              </span>
-            </div>
-          )}
-          {status === 'error' && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-              <WifiOff size={11} color="var(--err)"/>
-              <span style={{
-                fontFamily: 'var(--font-mono)', fontSize: 9,
-                fontWeight: 700, letterSpacing: '0.10em', color: 'var(--err)',
-              }}>
-                OFFLINE
-              </span>
-            </div>
-          )}
-        </div>
+        {/* Connection status */}
+        {status === 'loading' && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+            <div style={{ width: 13, height: 13, border: '2px solid var(--sky)', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }}/>
+            <span style={{ fontSize: 12, color: 'var(--sky)', fontWeight: 500 }}>Connecting…</span>
+          </div>
+        )}
+        {(status === 'live' || status === 'empty') && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+            <span className="live-dot" style={{ width: 7, height: 7 }}/>
+            <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--cyan)' }}>Live</span>
+          </div>
+        )}
+        {status === 'error' && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+            <WifiOff size={14} color="var(--err)"/>
+            <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--err)' }}>Offline</span>
+          </div>
+        )}
 
-        <div className="tel-sep"/>
+        <div style={{ width: 1, height: 16, background: 'var(--b1)' }}/>
 
         {/* Pipeline */}
         {pipelineStatus && (
           <>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-              <div style={{
-                width: 5, height: 5, borderRadius: '50%',
-                background: pipelineOk ? 'var(--ok)' : 'var(--err)',
-                boxShadow: pipelineOk ? '0 0 5px var(--ok)' : 'none',
-                flexShrink: 0,
-              }}/>
-              <span style={{
-                fontFamily: 'var(--font-mono)', fontSize: 9,
-                fontWeight: 600, letterSpacing: '0.09em',
-                color: pipelineOk ? 'var(--t3)' : 'var(--err)',
-              }}>
-                PIPELINE {pipelineOk ? 'OK' : 'ERR'}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <div style={{ width: 6, height: 6, borderRadius: '50%', background: pipelineOk ? 'var(--ok)' : 'var(--err)', boxShadow: pipelineOk ? '0 0 6px var(--ok)' : 'none' }}/>
+              <span style={{ fontSize: 12, color: pipelineOk ? 'var(--t3)' : 'var(--err)', fontWeight: 500 }}>
+                {pipelineOk ? 'Pipeline OK' : 'Pipeline Error'}
               </span>
             </div>
-            <div className="tel-sep"/>
+            <div style={{ width: 1, height: 16, background: 'var(--b1)' }}/>
           </>
         )}
 
-        {/* Last sync */}
-        {lastSync && <TelSeg label="Last Sync" value={`${lastSync} UTC`}/>}
-        {lastSync && <div className="tel-sep"/>}
-
-        {/* Events count */}
+        {/* Events loaded */}
         {events.length > 0 && (
           <>
-            <TelSeg label="Loaded" value={events.length.toLocaleString()} accent="var(--t1)"/>
-            <div className="tel-sep"/>
+            <span style={{ fontSize: 12, color: 'var(--t3)' }}>
+              <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, color: 'var(--t1)' }}>{events.length.toLocaleString()}</span> events
+            </span>
+            <div style={{ width: 1, height: 16, background: 'var(--b1)' }}/>
           </>
         )}
 
-        {/* Mission clock */}
-        <TelSeg label="Mission Time" value={`${utc} UTC`} accent="var(--cyan)"/>
+        {/* UTC clock */}
+        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 13, color: 'var(--cyan)', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>
+          {utc} <span style={{ color: 'var(--t4)', fontWeight: 400, fontSize: 11 }}>UTC</span>
+        </span>
 
-        <div className="tel-sep"/>
+        <div style={{ width: 1, height: 16, background: 'var(--b1)' }}/>
 
-        {/* Refresh */}
-        <button
-          className="btn"
-          onClick={refresh}
-          title="Refresh telemetry"
-          style={{ padding: '3px 8px', gap: 4, borderRadius: 'var(--r-sm)' }}
-        >
-          <RefreshCw size={10}/>
-          <span style={{ fontSize: 9, fontFamily: 'var(--font-mono)', letterSpacing: '0.08em' }}>
-            SYNC
-          </span>
+        <button className="btn" onClick={refresh} style={{ gap: 6, fontSize: 12, padding: '5px 12px' }}>
+          <RefreshCw size={12}/> Sync
         </button>
       </div>
     </header>
