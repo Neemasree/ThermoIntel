@@ -5,7 +5,6 @@ from typing import Dict, Tuple, Any
 import numpy as np
 import pandas as pd
 import xgboost as xgb
-from sklearn.model_selection import train_test_split
 from sklearn.metrics import (
     classification_report,
     confusion_matrix,
@@ -20,6 +19,10 @@ from app.ml.labels import ALL_LABELS, LABEL_TO_INT, INT_TO_LABEL
 
 TARGET_COL = "verified_label"
 MODEL_PATH = os.path.join(os.path.dirname(__file__), "saved_model.json")
+TEST_DATA_PATH = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "..", "..",
+                 "data", "labelled", "test_data.csv")
+)
 
 # CSV stores labels as floats (0.0, 1.0, 2.0, 3.0) — map to int
 FLOAT_TO_INT = {float(i): i for i in range(len(ALL_LABELS))}
@@ -59,21 +62,20 @@ def load_labelled_data(path: str) -> pd.DataFrame:
 
 def split_data(
     df: pd.DataFrame,
-    test_size: float = 0.2,
-    random_state: int = 42,
+    test_data_path: str = TEST_DATA_PATH,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series]:
+    """Use all 260 training rows for train, load held-out test_data.csv for test."""
 
-    # y must be extracted before prepare_features drops verified_label
-    y_full = df[TARGET_COL].astype(int)
-    X = prepare_features(df)
-    y = y_full.loc[X.index]
+    y_train_full = df[TARGET_COL].astype(int)
+    X_train = prepare_features(df)
+    y_train = y_train_full.loc[X_train.index]
 
-    return train_test_split(
-        X, y,
-        test_size=test_size,
-        random_state=random_state,
-        stratify=y,
-    )
+    df_test = load_labelled_data(test_data_path)
+    y_test_full = df_test[TARGET_COL].astype(int)
+    X_test = prepare_features(df_test)
+    y_test = y_test_full.loc[X_test.index]
+
+    return X_train, X_test, y_train, y_test
 
 
 # =========================================================
@@ -189,10 +191,11 @@ def run_training(csv_path: str, params: Dict[str, Any] = None) -> Dict[str, Any]
     for label, count in label_counts.items():
         print(f"  {label:<35} {count}")
 
-    print("\nSplitting data (80/20 stratified)...")
+    print("\nSplitting data (80/20 — fixed held-out test set)...")
     X_train, X_test, y_train, y_test = split_data(df)
-    print(f"  Train : {len(X_train)} rows")
-    print(f"  Test  : {len(X_test)} rows")
+    print(f"  Train : {len(X_train)} rows (100% of labelled_training_data.csv)")
+    print(f"  Test  : {len(X_test)} rows (held-out test_data.csv)")
+    print(f"  Ratio : {len(X_train)/(len(X_train)+len(X_test))*100:.0f}/{len(X_test)/(len(X_train)+len(X_test))*100:.0f}")
     print(f"  Features : {X_train.shape[1]}")
 
     print("\nTraining XGBoost...")
