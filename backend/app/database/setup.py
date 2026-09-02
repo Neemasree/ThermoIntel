@@ -1,4 +1,4 @@
-from typing import Dict, List, Tuple
+from typing import Any, Dict, List, Tuple
 
 import pandas as pd
 
@@ -6,6 +6,7 @@ from app.database.connection import (
     enable_postgis,
     get_db_cursor,
 )
+from app.database.migrations import compute_event_id, compute_source_event_hash
 
 
 # =========================================================
@@ -340,164 +341,401 @@ def normalize_firms_dataframe(
 
 
 # =========================================================
-# INSERT FIRMS RECORDS
+# INSERT / UPSERT FIRMS RECORDS
 # =========================================================
 
 def insert_firms_records(
     df: pd.DataFrame,
     source: str,
-    batch_size: int = 1000,
+    batch_size: int = 500,
 ) -> Tuple[int, int]:
     """
-    Insert FIRMS records into PostgreSQL in efficient batches.
+    Legacy compatibility wrapper around upsert_firms_records().
+
+    Returns (inserted_count, skipped_count) to preserve backward
+    compatibility with existing callers in firms_service.py.
+
+    'inserted' = new records
+    'skipped'  = unchanged records (already in DB, no changes)
+    Changed records are counted as inserted for legacy callers.
+    """
+    result = upsert_firms_records(df, source, batch_size)
+    inserted = result["new"] + result["changed"]
+    skipped = result["unchanged"]
+    return inserted, skipped
+
+
+def upsert_firms_records(
+    df: pd.DataFrame,
+    source: str,
+    batch_size: int = 500,
+) -> Dict[str, Any]:
+    """
+    Upsert FIRMS records into PostgreSQL with full change detection.
+
+    For each incoming FIRMS record:
+
+    NEW:
+        No matching event_id in the database.
+        Insert the record. Set firms_synced_at = NOW().
+        Set osm_enrichment_status = 'pending'.
+        Set worldcover_enrichment_status = 'pending'.
+
+    CHANGED:
+        Matching event_id exists but source_event_hash differs.
+        Update all authoritative FIRMS fields.
+        Update source_event_hash and firms_synced_at.
+        Reset osm_enrichment_status = 'pending' (context changed).
+        Reset worldcover_enrichment_status = 'pending' only if
+        coordinates changed (WorldCover context may be invalid).
+
+    UNCHANGED:
+        Matching event_id exists and source_event_hash is identical.
+        Update only firms_synced_at = NOW().
+        Do not overwrite any other field.
 
     Returns:
-        inserted_count,
-        skipped_count
-
-    Duplicate records are skipped using the database
-    UNIQUE constraint.
+        {
+            "fetched":   int,
+            "new":       int,
+            "changed":   int,
+            "unchanged": int,
+            "failed":    int,
+            # legacy compatibility
+            "inserted":  int,  (= new + changed)
+            "skipped":   int,  (= unchanged)
+        }
     """
-
     if df.empty:
-        return 0, 0
+        return {
+            "fetched": 0, "new": 0, "changed": 0,
+            "unchanged": 0, "failed": 0,
+            "inserted": 0, "skipped": 0,
+        }
 
-    normalized = normalize_firms_dataframe(
-        df,
-        source,
-    )
+    normalized = normalize_firms_dataframe(df, source)
+
+    counts = {"new": 0, "changed": 0, "unchanged": 0, "failed": 0}
 
     rows = []
-
     for _, row in normalized.iterrows():
-
         latitude = row.get("latitude")
         longitude = row.get("longitude")
 
         if pd.isna(latitude) or pd.isna(longitude):
+            counts["failed"] += 1
             continue
 
         latitude = float(latitude)
         longitude = float(longitude)
 
         if not (-90 <= latitude <= 90):
+            counts["failed"] += 1
             continue
-
         if not (-180 <= longitude <= 180):
+            counts["failed"] += 1
             continue
 
-        geom_wkt = f"POINT({longitude} {latitude})"
+        acq_date = row.get("acquisition_date")
+        acq_time = row.get("acquisition_time")
+        satellite = row.get("satellite") or ""
+        instrument = row.get("instrument")
+        version = row.get("version")
+        frp = row.get("frp")
+        brightness = row.get("brightness")
+        confidence = row.get("confidence")
+        daynight = row.get("daynight")
 
-        rows.append(
-            {
-                "latitude": latitude,
-                "longitude": longitude,
-                "geom": geom_wkt,
-                "frp": row.get("frp"),
-                "brightness": row.get("brightness"),
-                "confidence": row.get("confidence"),
-                "acquisition_date": row.get("acquisition_date"),
-                "acquisition_time": row.get("acquisition_time"),
-                "satellite": row.get("satellite"),
-                "instrument": row.get("instrument"),
-                "version": row.get("version"),
-                "daynight": row.get("daynight"),
-                "firms_source": source,
-                "bright_ti4": row.get("bright_ti4"),
-                "bright_ti5": row.get("bright_ti5"),
-                "bright_t31": row.get("bright_t31"),
-                "scan": row.get("scan"),
-                "track": row.get("track"),
-            }
+        eid = compute_event_id(satellite, str(acq_date), acq_time, latitude, longitude)
+        shash = compute_source_event_hash(
+            source, satellite, str(acq_date), acq_time,
+            latitude, longitude, frp, brightness, confidence,
+            daynight, instrument, version,
         )
+
+        rows.append({
+            "event_id": eid,
+            "source_event_hash": shash,
+            "latitude": latitude,
+            "longitude": longitude,
+            "geom": f"POINT({longitude} {latitude})",
+            "frp": frp,
+            "brightness": brightness,
+            "confidence": confidence,
+            "acquisition_date": acq_date,
+            "acquisition_time": acq_time,
+            "satellite": satellite,
+            "instrument": instrument,
+            "version": version,
+            "daynight": daynight,
+            "firms_source": source,
+            "bright_ti4": row.get("bright_ti4"),
+            "bright_ti5": row.get("bright_ti5"),
+            "bright_t31": row.get("bright_t31"),
+            "scan": row.get("scan"),
+            "track": row.get("track"),
+        })
 
     if not rows:
-        return 0, len(normalized)
+        return {
+            "fetched": len(df),
+            "new": 0, "changed": 0, "unchanged": 0,
+            "failed": counts["failed"],
+            "inserted": 0, "skipped": 0,
+        }
 
-    insert_sql = """
+    # ------------------------------------------------------------------
+    # Bulk-load existing event_ids + hashes for this batch in one query
+    # ------------------------------------------------------------------
+    event_ids = [r["event_id"] for r in rows]
+
+    existing: Dict[str, Tuple[str, float, float]] = {}
+    # existing[event_id] = (source_event_hash, latitude, longitude)
+    with get_db_cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT event_id, source_event_hash, latitude, longitude
+            FROM thermal_events
+            WHERE event_id = ANY(%s);
+            """,
+            (event_ids,),
+        )
+        for db_eid, db_hash, db_lat, db_lon in cursor.fetchall():
+            existing[db_eid] = (db_hash, float(db_lat), float(db_lon))
+
+    # ------------------------------------------------------------------
+    # Classify each record and build operation lists
+    # ------------------------------------------------------------------
+    new_rows: List[dict] = []
+    changed_rows: List[dict] = []
+    unchanged_rows: List[dict] = []
+
+    for row in rows:
+        eid = row["event_id"]
+        if eid not in existing:
+            new_rows.append(row)
+        else:
+            db_hash, db_lat, db_lon = existing[eid]
+            if row["source_event_hash"] != db_hash:
+                # Detect coordinate change to decide WorldCover reset
+                coords_changed = (
+                    abs(row["latitude"] - db_lat) > 1e-5 or
+                    abs(row["longitude"] - db_lon) > 1e-5
+                )
+                row["_coords_changed"] = coords_changed
+                changed_rows.append(row)
+            else:
+                unchanged_rows.append(row)
+
+    # ------------------------------------------------------------------
+    # Process in batches
+    # ------------------------------------------------------------------
+    for i in range(0, len(new_rows), batch_size):
+        batch = new_rows[i:i + batch_size]
+        _insert_new_batch(batch)
+        counts["new"] += len(batch)
+
+    for i in range(0, len(changed_rows), batch_size):
+        batch = changed_rows[i:i + batch_size]
+        _update_changed_batch(batch)
+        counts["changed"] += len(batch)
+
+    for i in range(0, len(unchanged_rows), batch_size):
+        batch = unchanged_rows[i:i + batch_size]
+        _update_unchanged_batch(batch)
+        counts["unchanged"] += len(batch)
+
+    return {
+        "fetched": len(df),
+        "new": counts["new"],
+        "changed": counts["changed"],
+        "unchanged": counts["unchanged"],
+        "failed": counts["failed"],
+        "inserted": counts["new"] + counts["changed"],
+        "skipped": counts["unchanged"],
+    }
+
+
+def _insert_new_batch(rows: List[dict]) -> None:
+    """Insert genuinely new FIRMS records."""
+    if not rows:
+        return
+
+    sql = """
         INSERT INTO thermal_events (
-            latitude,
-            longitude,
-            geom,
-            frp,
-            brightness,
-            confidence,
-            acquisition_date,
-            acquisition_time,
-            satellite,
-            instrument,
-            version,
-            daynight,
+            event_id,
+            source_event_hash,
+            latitude, longitude, geom,
+            frp, brightness, confidence,
+            acquisition_date, acquisition_time,
+            satellite, instrument, version, daynight,
             firms_source,
-            bright_ti4,
-            bright_ti5,
-            bright_t31,
-            scan,
-            track
+            bright_ti4, bright_ti5, bright_t31,
+            scan, track,
+            firms_synced_at,
+            osm_enrichment_status,
+            worldcover_enrichment_status
         )
         VALUES (
+            %s, %s,
+            %s, %s, ST_GeomFromText(%s, 4326),
+            %s, %s, %s,
+            %s, %s,
+            %s, %s, %s, %s,
             %s,
-            %s,
-            ST_GeomFromText(%s, 4326),
-            %s,
-            %s,
-            %s,
-            %s,
-            %s,
-            %s,
-            %s,
-            %s,
-            %s,
-            %s,
-            %s,
-            %s,
-            %s,
-            %s,
-            %s
+            %s, %s, %s,
+            %s, %s,
+            NOW(),
+            'pending',
+            'pending'
         )
-        ON CONFLICT DO NOTHING;
+        ON CONFLICT ON CONSTRAINT uq_thermal_events_firms_identity
+        DO NOTHING;
+    """
+    params = [
+        (
+            r["event_id"], r["source_event_hash"],
+            r["latitude"], r["longitude"], r["geom"],
+            r["frp"], r["brightness"], r["confidence"],
+            r["acquisition_date"], r["acquisition_time"],
+            r["satellite"], r["instrument"], r["version"], r["daynight"],
+            r["firms_source"],
+            r["bright_ti4"], r["bright_ti5"], r["bright_t31"],
+            r["scan"], r["track"],
+        )
+        for r in rows
+    ]
+    with get_db_cursor() as cursor:
+        cursor.executemany(sql, params)
+
+
+def _update_changed_batch(rows: List[dict]) -> None:
+    """
+    Update authoritative FIRMS fields for CHANGED records.
+    Resets OSM enrichment to pending (context has changed).
+    Resets WorldCover enrichment to pending only when coordinates changed.
+    """
+    if not rows:
+        return
+
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+
+    for row in rows:
+        coords_changed = row.get("_coords_changed", False)
+        wc_reset = "worldcover_enrichment_status = 'pending'" if coords_changed else ""
+        wc_reset_geom = (
+            "worldcover_class_code = NULL, "
+            "worldcover_class_name = NULL, "
+            "worldcover_version = NULL, "
+            "worldcover_enriched_at = NULL, "
+        ) if coords_changed else ""
+
+        sql = f"""
+            UPDATE thermal_events
+            SET
+                source_event_hash           = %s,
+                latitude                    = %s,
+                longitude                   = %s,
+                geom                        = ST_GeomFromText(%s, 4326),
+                frp                         = %s,
+                brightness                  = %s,
+                confidence                  = %s,
+                acquisition_date            = %s,
+                acquisition_time            = %s,
+                satellite                   = %s,
+                instrument                  = %s,
+                version                     = %s,
+                daynight                    = %s,
+                firms_source                = %s,
+                bright_ti4                  = %s,
+                bright_ti5                  = %s,
+                bright_t31                  = %s,
+                scan                        = %s,
+                track                       = %s,
+                firms_synced_at             = %s,
+                osm_enrichment_status       = 'pending',
+                {wc_reset_geom}
+                {("worldcover_enrichment_status = 'pending'," if coords_changed else "")}
+                last_error                  = NULL
+            WHERE event_id = %s;
+        """
+        params = (
+            row["source_event_hash"],
+            row["latitude"], row["longitude"], row["geom"],
+            row["frp"], row["brightness"], row["confidence"],
+            row["acquisition_date"], row["acquisition_time"],
+            row["satellite"], row["instrument"], row["version"],
+            row["daynight"], row["firms_source"],
+            row["bright_ti4"], row["bright_ti5"], row["bright_t31"],
+            row["scan"], row["track"],
+            now,
+            row["event_id"],
+        )
+        with get_db_cursor() as cursor:
+            cursor.execute(sql, params)
+
+
+def _update_unchanged_batch(rows: List[dict]) -> None:
+    """
+    For UNCHANGED records, update only firms_synced_at.
+    All other fields are left exactly as they are.
+    """
+    if not rows:
+        return
+
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+
+    params = [(now, r["event_id"]) for r in rows]
+    with get_db_cursor() as cursor:
+        cursor.executemany("""
+            UPDATE thermal_events
+            SET firms_synced_at = %s
+            WHERE event_id = %s;
+        """, params)
+
+
+# =========================================================
+# WORLDCOVER SCHEMA MIGRATION
+# =========================================================
+
+def add_worldcover_columns() -> None:
+    """
+    Add ESA WorldCover enrichment columns to thermal_events.
+
+    This migration is idempotent — it uses ADD COLUMN IF NOT EXISTS
+    so it is safe to run against a table that already has the columns.
+
+    Columns added:
+        worldcover_class_code   SMALLINT   — official class integer (10–100)
+        worldcover_class_name   VARCHAR    — human-readable class label
+        worldcover_version      VARCHAR    — dataset version string, e.g. 'v200'
+        worldcover_enriched_at  TIMESTAMPTZ — UTC timestamp of enrichment run
     """
 
-    inserted_total = 0
-    skipped_total = 0
-
     with get_db_cursor() as cursor:
-        for i in range(0, len(rows), batch_size):
-            batch = rows[i:i + batch_size]
-            batch_values = [
-                (
-                    row["latitude"],
-                    row["longitude"],
-                    row["geom"],
-                    row["frp"],
-                    row["brightness"],
-                    row["confidence"],
-                    row["acquisition_date"],
-                    row["acquisition_time"],
-                    row["satellite"],
-                    row["instrument"],
-                    row["version"],
-                    row["daynight"],
-                    row["firms_source"],
-                    row["bright_ti4"],
-                    row["bright_ti5"],
-                    row["bright_t31"],
-                    row["scan"],
-                    row["track"],
-                )
-                for row in batch
-            ]
 
-            try:
-                cursor.executemany(insert_sql, batch_values)
-                batch_inserted = cursor.rowcount
-                inserted_total += batch_inserted
-                skipped_total += len(batch) - batch_inserted
-            except Exception as exc:
-                print(f"Warning: batch insert failed for {source}: {exc}")
-                skipped_total += len(batch)
+        cursor.execute(
+            """
+            ALTER TABLE thermal_events
+                ADD COLUMN IF NOT EXISTS worldcover_class_code  SMALLINT,
+                ADD COLUMN IF NOT EXISTS worldcover_class_name  VARCHAR(100),
+                ADD COLUMN IF NOT EXISTS worldcover_version     VARCHAR(20),
+                ADD COLUMN IF NOT EXISTS worldcover_enriched_at TIMESTAMPTZ;
+            """
+        )
 
-    return inserted_total, skipped_total
+        # Index for fast grouping/filtering by land-cover class
+        cursor.execute(
+            """
+            CREATE INDEX IF NOT EXISTS
+            idx_thermal_events_worldcover_class_code
+            ON thermal_events (worldcover_class_code);
+            """
+        )
+
+        print("✓ WorldCover columns added (or already present)")
 
 
 # =========================================================
@@ -630,6 +868,23 @@ def init_database() -> bool:
         )
 
         create_thermal_events_table()
+
+        print(
+            "Adding WorldCover enrichment columns..."
+        )
+
+        add_worldcover_columns()
+
+        print(
+            "Running Phase 1 live pipeline migrations..."
+        )
+
+        from app.database.migrations import (
+            migrate_phase1_columns,
+            create_pipeline_status_table,
+        )
+        migrate_phase1_columns()
+        create_pipeline_status_table()
 
         print(
             "Database initialization completed."

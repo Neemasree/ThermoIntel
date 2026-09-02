@@ -55,6 +55,13 @@ logs/
 Thumbs.db
 .DS_Store
 
-# Large geospatial binary files
-*.pbf
-*.osm
+# Database dumps and exports (large binary files — do not commit)
+*.dump
+*.sql
+worldcover_export.csv
+
+# Temporary diagnostic/migration scripts
+backend/_*.py
+
+# Large data files
+*.csv
