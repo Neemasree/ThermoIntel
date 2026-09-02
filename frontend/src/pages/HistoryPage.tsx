@@ -1,292 +1,172 @@
 import React, { useState, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { WifiOff, SlidersHorizontal, X } from 'lucide-react'
+import { AlertCircle, Loader, Filter } from 'lucide-react'
 import { useAppContext } from '../App'
-import { frpColor, formatAcqTime, confidenceLabel, frpTier } from '../utils/eventUtils'
-import type { ApiThermalEvent } from '../types/api'
+import { formatAcqTime, confidenceLabel } from '../utils/eventUtils'
 
-interface Filters {
-  satellite: string; source: string; daynight: '' | 'D' | 'N'
-  minFrp: number | null; worldcover: '' | 'enriched' | 'pending'
-}
-const DEFAULT: Filters = { satellite: '', source: '', daynight: '', minFrp: null, worldcover: '' }
-
-/* Fixed column layout — every column has an explicit size to prevent collision */
-const GRID = '4px 140px minmax(160px,1fr) 100px 68px 90px 100px'
-
-function ObsRow({ ev, selected, onSelect }: {
-  ev: ApiThermalEvent; selected: boolean; onSelect: () => void
-}) {
-  const fc = frpColor(ev.frp)
-  const barW = ev.frp != null ? Math.min(100, (ev.frp / 3000) * 100) : 0
-
-  return (
-    <div
-      onClick={onSelect}
-      style={{
-        display: 'grid',
-        gridTemplateColumns: GRID,
-        alignItems: 'center',
-        minHeight: 52,
-        cursor: 'pointer',
-        borderBottom: '1px solid var(--b0)',
-        background: selected ? 'var(--d7)' : 'transparent',
-        borderLeft: `3px solid ${selected ? 'var(--cyan)' : 'transparent'}`,
-        transition: 'background var(--ease), border-color var(--ease)',
-      }}
-      onMouseEnter={e => { if (!selected) (e.currentTarget as HTMLElement).style.background = 'var(--d5)' }}
-      onMouseLeave={e => { if (!selected) (e.currentTarget as HTMLElement).style.background = 'transparent' }}
-    >
-      {/* FRP colour swatch */}
-      <div style={{ width: 4, alignSelf: 'stretch', background: fc, opacity: 0.75 }}/>
-
-      {/* Time + date */}
-      <div style={{ padding: '0 14px', display: 'flex', flexDirection: 'column', gap: 3 }}>
-        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 13, color: 'var(--t1)', fontWeight: 500, letterSpacing: '0.03em' }}>
-          {formatAcqTime(ev.acquisition_time)}
-        </span>
-        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--t4)' }}>
-          {ev.acquisition_date ?? '—'}
-        </span>
-      </div>
-
-      {/* Satellite + FRP bar */}
-      <div style={{ padding: '10px 14px 10px 0', minWidth: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 5, flexWrap: 'wrap' }}>
-          <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--t1)' }}>
-            {ev.satellite ?? '—'}
-          </span>
-          {ev.instrument && (
-            <span style={{ fontSize: 11, color: 'var(--t4)', fontFamily: 'var(--font-mono)' }}>
-              {ev.instrument}
-            </span>
-          )}
-          <span style={{
-            fontSize: 10, fontWeight: 700, letterSpacing: '0.10em',
-            color: 'var(--t3)', fontFamily: 'var(--font-mono)',
-            background: 'var(--d6)', border: '1px solid var(--b1)',
-            borderRadius: 2, padding: '1px 6px',
-          }}>
-            {ev.daynight === 'D' ? 'DAY' : ev.daynight === 'N' ? 'NIGHT' : '—'}
-          </span>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <div style={{ flex: 1, height: 3, background: 'var(--d6)', borderRadius: 1, overflow: 'hidden', maxWidth: 130 }}>
-            <div style={{ height: '100%', width: `${barW}%`, background: fc, borderRadius: 1, transition: 'width 0.4s ease' }}/>
-          </div>
-          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 14, fontWeight: 700, color: fc, fontVariantNumeric: 'tabular-nums' }}>
-            {ev.frp != null ? `${ev.frp.toLocaleString()} MW` : '—'}
-          </span>
-          <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.08em', color: fc, opacity: 0.75, fontFamily: 'var(--font-mono)' }}>
-            {frpTier(ev.frp).toUpperCase()}
-          </span>
-        </div>
-      </div>
-
-      {/* Confidence */}
-      <div style={{ padding: '0 12px', display: 'flex', flexDirection: 'column', gap: 3, overflow: 'hidden' }}>
-        <span style={{ fontSize: 10, color: 'var(--t4)', fontFamily: 'var(--font-mono)', letterSpacing: '0.10em', textTransform: 'uppercase' }}>Conf.</span>
-        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 13, color: 'var(--t2)', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-          title={confidenceLabel(ev.confidence)}>
-          {confidenceLabel(ev.confidence)}
-        </span>
-      </div>
-
-      {/* Brightness */}
-      <div style={{ padding: '0 10px', display: 'flex', flexDirection: 'column', gap: 3, overflow: 'hidden' }}>
-        <span style={{ fontSize: 10, color: 'var(--t4)', fontFamily: 'var(--font-mono)', letterSpacing: '0.10em', textTransform: 'uppercase' }}>K</span>
-        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 13, color: 'var(--t2)', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-          title={ev.brightness != null ? `${ev.brightness.toFixed(1)} K` : '\u2014'}>
-          {ev.brightness != null ? ev.brightness.toFixed(1) : '\u2014'}
-        </span>
-      </div>
-
-      {/* Coords */}
-      <div style={{ padding: '0 10px', display: 'flex', flexDirection: 'column', gap: 2, overflow: 'hidden' }}
-        title={`${ev.latitude.toFixed(4)}\u00b0, ${ev.longitude.toFixed(4)}\u00b0`}>
-        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--t3)', fontVariantNumeric: 'tabular-nums', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {ev.latitude.toFixed(2)}\u00b0
-        </span>
-        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--t3)', fontVariantNumeric: 'tabular-nums', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {ev.longitude.toFixed(2)}\u00b0
-        </span>
-      </div>
-
-      {/* Event ID */}
-      <div style={{ padding: '0 10px', overflow: 'hidden' }}>
-        <span
-          style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: selected ? 'var(--cyan)' : 'var(--t4)', display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-          title={ev.event_id ?? '\u2014'}>
-          {ev.event_id ?? '\u2014'}
-        </span>
-        {ev.worldcover_class_name && (
-          <span style={{ fontSize: 10, color: 'var(--t4)', display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-            title={ev.worldcover_class_name}>
-            {ev.worldcover_class_name}
-          </span>
-        )}
-      </div>
-    </div>
-  )
+function frpColor(frp: number | null): string {
+  if (frp == null) return '#38BDF8'
+  if (frp > 2000)  return '#DC2626'
+  if (frp > 1000)  return '#EF4444'
+  if (frp > 500)   return '#F97316'
+  if (frp > 200)   return '#FB923C'
+  if (frp > 50)    return '#FCD34D'
+  return '#38BDF8'
 }
 
 export default function HistoryPage() {
   const { events, status, error, selectedEvent, setSelectedEvent } = useAppContext()
   const navigate = useNavigate()
-  const [filters, setFilters] = useState<Filters>(DEFAULT)
 
-  const satellites = useMemo(() => [...new Set(events.map(e => e.satellite).filter(Boolean) as string[])].sort(), [events])
-  const sources    = useMemo(() => [...new Set(events.map(e => e.firms_source).filter(Boolean) as string[])].sort(), [events])
+  const [filterDaynight, setFilterDaynight] = useState<'all' | 'D' | 'N'>('all')
+  const [filterSource, setFilterSource] = useState<string>('all')
+  const [showFilters, setShowFilters] = useState(false)
 
-  const setF = <K extends keyof Filters>(k: K, v: Filters[K]) => setFilters(p => ({ ...p, [k]: v }))
-  const reset = () => setFilters(DEFAULT)
+  const sources = useMemo(() => {
+    const s = new Set(events.map(e => e.firms_source).filter(Boolean) as string[])
+    return ['all', ...Array.from(s)]
+  }, [events])
 
-  const filtered = useMemo(() => events.filter(ev => {
-    if (filters.satellite && ev.satellite !== filters.satellite) return false
-    if (filters.source    && ev.firms_source !== filters.source) return false
-    if (filters.daynight  && ev.daynight !== filters.daynight)   return false
-    if (filters.minFrp != null && (ev.frp == null || ev.frp < filters.minFrp)) return false
-    if (filters.worldcover === 'enriched' && ev.worldcover_version == null) return false
-    if (filters.worldcover === 'pending'  && ev.worldcover_version != null) return false
-    return true
-  }), [events, filters])
+  const filtered = useMemo(() => {
+    return events.filter(e => {
+      if (filterDaynight !== 'all' && e.daynight !== filterDaynight) return false
+      if (filterSource !== 'all' && e.firms_source !== filterSource) return false
+      return true
+    })
+  }, [events, filterDaynight, filterSource])
 
-  const anyFilter = !!(filters.satellite || filters.source || filters.daynight || filters.minFrp != null || filters.worldcover)
+  // Group by date
+  const grouped = useMemo(() => {
+    const g: Record<string, typeof filtered> = {}
+    for (const e of filtered) {
+      const key = e.acquisition_date ?? 'Unknown'
+      if (!g[key]) g[key] = []
+      g[key].push(e)
+    }
+    return Object.entries(g).sort((a, b) => b[0].localeCompare(a[0]))
+  }, [filtered])
 
-  function handleSelect(evId: string | null) {
-    if (!evId) return
-    const found = events.find(e => e.event_id === evId)
-    if (found) { setSelectedEvent(found); navigate('/risk') }
+  function handleSelect(event: typeof events[0]) {
+    setSelectedEvent(event)
+    navigate('/risk')
   }
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden', background: 'var(--d1)' }}>
 
       {/* Header */}
-      <div style={{ padding: '12px 18px 10px', background: 'var(--d2)', borderBottom: '1px solid var(--b1)', flexShrink: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 10 }}>
+      <div style={{ padding: '12px 20px 8px', flexShrink: 0, borderBottom: '1px solid var(--b1)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 3 }}>
-              <div style={{ width: 3, height: 16, background: 'var(--cyan)', borderRadius: 1, boxShadow: '0 0 6px var(--cyan)' }}/>
-              <h1 style={{ fontSize: 17, fontWeight: 800, color: 'var(--t1)', letterSpacing: '-0.01em' }}>
-                Observation Log
-              </h1>
-            </div>
-            <p style={{ fontSize: 12, color: 'var(--t4)', fontFamily: 'var(--font-mono)', letterSpacing: '0.04em' }}>
-              FIRMS DETECTION ARCHIVE ·{' '}
-              <span style={{ color: 'var(--t2)' }}>{events.length.toLocaleString()}</span> LOADED
-              {filtered.length !== events.length && (
-                <span style={{ color: 'var(--cyan)' }}> · {filtered.length.toLocaleString()} FILTERED</span>
-              )}
-            </p>
+            <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.14em', textTransform: 'uppercase', color: 'var(--t4)', marginBottom: 1 }}>Observation Log</div>
+            <div style={{ fontSize: 11, color: 'var(--t4)' }}>FIRMS Detection Archive · {filtered.length.toLocaleString()} observations</div>
           </div>
-          {anyFilter && (
-            <button className="btn" onClick={reset} style={{ gap: 6, fontSize: 11 }}>
-              <X size={10}/> Clear filters
-            </button>
-          )}
+          <button
+            onClick={() => setShowFilters(p => !p)}
+            className={`btn ${showFilters ? 'btn-cyan' : ''}`}
+            style={{ fontSize: 10, padding: '4px 10px' }}
+          >
+            <Filter size={10}/> Filters
+          </button>
         </div>
 
-        {/* Filter chips */}
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginRight: 4, flexShrink: 0 }}>
-            <SlidersHorizontal size={12} color="var(--t4)"/>
-            <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.14em', color: 'var(--t4)', fontFamily: 'var(--font-mono)' }}>
-              FILTER
-            </span>
+        {/* Filter bar */}
+        {showFilters && (
+          <div style={{ marginTop: 8, display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
+            <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+              <span style={{ fontSize: 9, color: 'var(--t4)', fontFamily: 'var(--font-mono)', letterSpacing: '0.1em' }}>DAY/NIGHT</span>
+              {(['all', 'D', 'N'] as const).map(f => (
+                <button key={f} onClick={() => setFilterDaynight(f)} className={`chip ${filterDaynight === f ? 'active' : ''}`} style={{ fontSize: 9, padding: '2px 8px' }}>
+                  {f === 'all' ? 'ALL' : f === 'D' ? 'DAY' : 'NIGHT'}
+                </button>
+              ))}
+            </div>
+            <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 9, color: 'var(--t4)', fontFamily: 'var(--font-mono)', letterSpacing: '0.1em' }}>SOURCE</span>
+              {sources.map(s => (
+                <button key={s} onClick={() => setFilterSource(s)} className={`chip ${filterSource === s ? 'active' : ''}`} style={{ fontSize: 9, padding: '2px 8px' }}>
+                  {s.toUpperCase()}
+                </button>
+              ))}
+            </div>
           </div>
-          {satellites.map(s => (
-            <button key={s} className={`chip${filters.satellite === s ? ' active' : ''}`}
-              onClick={() => setF('satellite', filters.satellite === s ? '' : s)}>{s}</button>
-          ))}
-          {satellites.length > 0 && <div style={{ width: 1, height: 16, background: 'var(--b1)', flexShrink: 0 }}/>}
-          {sources.map(s => (
-            <button key={s} className={`chip${filters.source === s ? ' active' : ''}`}
-              onClick={() => setF('source', filters.source === s ? '' : s)}>{s}</button>
-          ))}
-          {sources.length > 0 && <div style={{ width: 1, height: 16, background: 'var(--b1)', flexShrink: 0 }}/>}
-          <button className={`chip${filters.daynight === 'D' ? ' active' : ''}`}
-            onClick={() => setF('daynight', filters.daynight === 'D' ? '' : 'D')}>Daytime</button>
-          <button className={`chip${filters.daynight === 'N' ? ' active' : ''}`}
-            onClick={() => setF('daynight', filters.daynight === 'N' ? '' : 'N')}>Nighttime</button>
-          <div style={{ width: 1, height: 16, background: 'var(--b1)', flexShrink: 0 }}/>
-          {[50, 200, 500, 1000].map(f => (
-            <button key={f} className={`chip${filters.minFrp === f ? ' active' : ''}`}
-              onClick={() => setF('minFrp', filters.minFrp === f ? null : f)}>FRP ≥ {f}</button>
-          ))}
-          <div style={{ width: 1, height: 16, background: 'var(--b1)', flexShrink: 0 }}/>
-          <button className={`chip${filters.worldcover === 'enriched' ? ' active' : ''}`}
-            onClick={() => setF('worldcover', filters.worldcover === 'enriched' ? '' : 'enriched')}>WC Enriched</button>
-          <button className={`chip${filters.worldcover === 'pending' ? ' active' : ''}`}
-            onClick={() => setF('worldcover', filters.worldcover === 'pending' ? '' : 'pending')}>WC Pending</button>
-        </div>
+        )}
       </div>
 
-      {/* Column headers — same grid as rows */}
-      <div style={{
-        display: 'grid', gridTemplateColumns: GRID,
-        alignItems: 'center',
-        padding: '6px 0', background: 'var(--d4)',
-        borderBottom: '1px solid var(--b1)', flexShrink: 0,
-        minWidth: 0,
-      }}>
-        <div/>
-        {[
-          { label: 'TIME / DATE',       pad: '0 14px' },
-          { label: 'SATELLITE \u00b7 SIGNAL', pad: '0 14px 0 0' },
-          { label: 'CONF.',             pad: '0 12px' },
-          { label: 'BRIGHT (K)',        pad: '0 10px' },
-          { label: 'COORDS',            pad: '0 10px' },
-          { label: 'EVENT ID',          pad: '0 10px' },
-        ].map(({ label, pad }) => (
-          <div key={label} style={{
-            fontSize: 10, fontWeight: 700, textTransform: 'uppercase',
-            letterSpacing: '0.10em', color: 'var(--t3)',
-            fontFamily: 'var(--font-mono)', padding: pad,
-            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-          }}>{label}</div>
+      {/* Column headers */}
+      <div style={{ display: 'grid', gridTemplateColumns: '72px 90px 120px 90px 80px 80px 110px 110px 1fr', padding: '6px 20px', borderBottom: '1px solid var(--b1)', background: 'var(--d3)', flexShrink: 0 }}>
+        {['Time', 'FRP', 'Event ID', 'Brightness', 'Conf.', 'D/N', 'Satellite', 'Source', 'Land Cover'].map(col => (
+          <div key={col} style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--t4)', fontFamily: 'var(--font-mono)' }}>{col}</div>
         ))}
       </div>
 
-      {/* Rows */}
+      {/* Content */}
       <div style={{ flex: 1, overflowY: 'auto' }}>
         {status === 'loading' && (
-          <div style={{ padding: '18px', display: 'flex', flexDirection: 'column', gap: 7 }}>
-            {[...Array(8)].map((_, i) => <div key={i} className="skeleton" style={{ height: 52, borderRadius: 5 }}/>)}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 200, flexDirection: 'column', gap: 10, color: 'var(--t3)' }}>
+            <Loader size={20} color="var(--cyan)" style={{ animation: 'spin 0.9s linear infinite' }}/>
+            <span style={{ fontSize: 13 }}>Loading thermal observations…</span>
           </div>
         )}
         {status === 'error' && (
-          <div style={{ padding: '48px 24px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14, textAlign: 'center' }}>
-            <WifiOff size={24} color="var(--err)"/>
-            <div style={{ fontFamily: 'var(--font-mono)', fontSize: 13, color: 'var(--err)', fontWeight: 700, letterSpacing: '0.08em' }}>
-              DATA CONNECTION LOST
-            </div>
-            <div style={{ fontSize: 12, color: 'var(--t4)', maxWidth: 320, lineHeight: 1.6 }}>
-              Unable to retrieve live ThermalWatch telemetry. {error}
-            </div>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 200, flexDirection: 'column', gap: 8, color: 'var(--err)' }}>
+            <AlertCircle size={20}/>
+            <span style={{ fontSize: 13 }}>Data source unavailable — {error}</span>
           </div>
         )}
-        {status === 'empty' && (
-          <div style={{ padding: '48px', textAlign: 'center' }}>
-            <div style={{ fontFamily: 'var(--font-mono)', fontSize: 13, color: 'var(--t4)', letterSpacing: '0.10em' }}>
-              NO DETECTIONS IN CURRENT RANGE
+        {(status === 'live' || status === 'empty') && grouped.map(([date, dateEvents]) => (
+          <div key={date}>
+            {/* Date group header */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 20px 4px', background: 'var(--d2)', borderBottom: '1px solid var(--b0)', position: 'sticky', top: 0, zIndex: 10 }}>
+              <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--cyan)', fontFamily: 'var(--font-mono)', letterSpacing: '0.06em' }}>{date}</span>
+              <div style={{ flex: 1, height: 1, background: 'var(--b0)' }}/>
+              <span style={{ fontSize: 10, color: 'var(--t4)', fontFamily: 'var(--font-mono)' }}>{dateEvents.length.toLocaleString()} detections</span>
             </div>
+
+            {/* Event rows */}
+            {dateEvents.map((event, idx) => {
+              const isSelected = selectedEvent?.event_id === event.event_id
+              const c = frpColor(event.frp)
+              return (
+                <div
+                  key={event.event_id ?? event.id}
+                  onClick={() => handleSelect(event)}
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: '72px 90px 120px 90px 80px 80px 110px 110px 1fr',
+                    padding: '5px 20px',
+                    borderBottom: '1px solid var(--b0)',
+                    cursor: 'pointer',
+                    background: isSelected ? 'rgba(29,232,227,0.06)' : idx % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.01)',
+                    borderLeft: `2px solid ${isSelected ? 'var(--cyan)' : 'transparent'}`,
+                    transition: 'background var(--ease)',
+                    alignItems: 'center',
+                  }}
+                  onMouseEnter={e => { if (!isSelected) (e.currentTarget as HTMLDivElement).style.background = 'var(--d4)' }}
+                  onMouseLeave={e => { if (!isSelected) (e.currentTarget as HTMLDivElement).style.background = idx % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.01)' }}
+                >
+                  <div style={{ fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--t4)' }}>{formatAcqTime(event.acquisition_time)}</div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                    <div style={{ width: 5, height: 5, borderRadius: '50%', background: c, boxShadow: `0 0 4px ${c}`, flexShrink: 0 }}/>
+                    <span style={{ fontSize: 11, fontFamily: 'var(--font-mono)', color: c, fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>
+                      {event.frp != null ? `${event.frp.toLocaleString()}` : '—'}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: 10, fontFamily: 'var(--font-mono)', color: isSelected ? 'var(--cyan)' : 'var(--t3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {event.event_id ?? `#${event.id}`}
+                  </div>
+                  <div style={{ fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--t3)', fontVariantNumeric: 'tabular-nums' }}>
+                    {event.brightness != null ? `${event.brightness.toFixed(1)} K` : '—'}
+                  </div>
+                  <div style={{ fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--t3)' }}>{confidenceLabel(event.confidence)}</div>
+                  <div style={{ fontSize: 11, color: 'var(--t4)' }}>{event.daynight ?? '—'}</div>
+                  <div style={{ fontSize: 11, color: 'var(--t3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{event.satellite ?? '—'}</div>
+                  <div style={{ fontSize: 11, color: 'var(--t4)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{event.firms_source ?? '—'}</div>
+                  <div style={{ fontSize: 11, color: 'var(--t4)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{event.worldcover_class_name ?? '—'}</div>
+                </div>
+              )
+            })}
           </div>
-        )}
-        {anyFilter && filtered.length === 0 && status !== 'loading' && (
-          <div style={{ padding: '48px', textAlign: 'center' }}>
-            <div style={{ fontFamily: 'var(--font-mono)', fontSize: 13, color: 'var(--t4)', letterSpacing: '0.10em' }}>
-              NO EVENTS MATCH CURRENT FILTERS
-            </div>
-          </div>
-        )}
-        {filtered.map(ev => (
-          <ObsRow
-            key={ev.event_id ?? `${ev.latitude},${ev.longitude}`}
-            ev={ev}
-            selected={selectedEvent?.event_id === ev.event_id}
-            onSelect={() => handleSelect(ev.event_id)}
-          />
         ))}
       </div>
     </div>

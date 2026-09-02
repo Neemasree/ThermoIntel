@@ -9,6 +9,7 @@ import AnalyticsPage from './pages/AnalyticsPage'
 import FacilitiesPage from './pages/FacilitiesPage'
 import HistoryPage from './pages/HistoryPage'
 import TerminalPage from './pages/TerminalPage'
+import ExplainPage from './pages/ExplainPage'
 import type { ApiThermalEvent } from './types/api'
 import { useLiveData } from './hooks/useLiveData'
 import type { LiveData } from './hooks/useLiveData'
@@ -46,13 +47,15 @@ function Layout() {
         <Topbar />
         <div className="page-content">
           <Routes>
-            <Route path="/"           element={<HomePage />} />
+            <Route path="/"           element={<MapPage />} />
+            <Route path="/explorer"   element={<HomePage />} />
             <Route path="/map"        element={<MapPage />} />
             <Route path="/risk"       element={<RiskPage />} />
             <Route path="/analytics"  element={<AnalyticsPage />} />
             <Route path="/facilities" element={<FacilitiesPage />} />
             <Route path="/history"    element={<HistoryPage />} />
             <Route path="/terminal"   element={<TerminalPage />} />
+            <Route path="/explain"    element={<ExplainPage />} />
           </Routes>
         </div>
       </div>

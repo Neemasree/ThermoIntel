@@ -17,36 +17,64 @@ export interface LiveData {
 }
 
 export function useLiveData(): LiveData {
-  const [events, setEvents]               = useState<ApiThermalEvent[]>([])
-  const [statistics, setStatistics]       = useState<ApiStatistics | null>(null)
-  const [pipelineStatus, setPipelineStatus] = useState<ApiPipelineStatus | null>(null)
-  const [status, setStatus]               = useState<LiveDataStatus>('loading')
-  const [error, setError]                 = useState<string | null>(null)
-  const [lastUpdatedAt, setLastUpdatedAt] = useState<Date | null>(null)
+  const [events,          setEvents         ] = useState<ApiThermalEvent[]>([])
+  const [statistics,      setStatistics     ] = useState<ApiStatistics | null>(null)
+  const [pipelineStatus,  setPipelineStatus ] = useState<ApiPipelineStatus | null>(null)
+  const [status,          setStatus         ] = useState<LiveDataStatus>('loading')
+  const [error,           setError          ] = useState<string | null>(null)
+  const [lastUpdatedAt,   setLastUpdatedAt  ] = useState<Date | null>(null)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const fetchAll = useCallback(async (signal: AbortSignal) => {
     try {
-      const [eventsRes, statsRes, pipelineRes] = await Promise.all([
-        // Use /events with limit=2000 sorted by acquisition_date DESC
-        // This gives global geographic spread rather than 500 events
-        // all from the same recently-ingested region.
-        api.events({ limit: 2000 }, signal),
+      // Fetch stats + pipeline first so we know total row count
+      const [statsRes, pipelineRes] = await Promise.all([
         api.statistics(signal),
         api.pipelineStatus(signal),
       ])
 
       if (signal.aborted) return
 
-      if (eventsRes.error) throw new Error(eventsRes.error)
+      // Fetch global coverage: 4 regions × 2 time offsets = 8 slices × 500 = up to 4000 events
+      // Two offsets per region ensures we get both recent AND spread-out detections
+      const S = 500
+      const week_ago = new Date(Date.now() - 7*86400000).toISOString().slice(0,10)
+      const reqs = [
+        // Global latest
+        { limit: S, offset: 0 },
+        { limit: S, offset: 500 },
+        // Asia / India / Oceania  lon 60–150
+        { limit: S, offset: 0,    date_from: week_ago, lon_min: 60,   lon_max: 150 },
+        { limit: S, offset: 500,  date_from: week_ago, lon_min: 60,   lon_max: 150 },
+        // Africa / Europe  lon -30–60
+        { limit: S, offset: 0,    date_from: week_ago, lon_min: -30,  lon_max: 60  },
+        { limit: S, offset: 500,  date_from: week_ago, lon_min: -30,  lon_max: 60  },
+        // Americas  lon -180– -30
+        { limit: S, offset: 0,    date_from: week_ago, lon_min: -180, lon_max: -30 },
+        { limit: S, offset: 500,  date_from: week_ago, lon_min: -180, lon_max: -30 },
+      ]
+      const slices = await Promise.all(
+        reqs.map(f => api.events(f, signal).catch(() => ({ events: [] as ApiThermalEvent[], total: 0, limit: S, offset: 0 })))
+      )
 
-      const incoming = eventsRes.events ?? []
+      if (signal.aborted) return
 
-      // Merge: keep existing events not in the new batch, add/update new ones
+      // Deduplicate across all slices
+      const seenIds = new Set<string>()
+      const incoming: ApiThermalEvent[] = []
+      for (const slice of slices) {
+        for (const e of (slice.events ?? [])) {
+          const key = e.event_id ?? `${e.latitude},${e.longitude}`
+          if (!seenIds.has(key)) {
+            seenIds.add(key)
+            incoming.push(e)
+          }
+        }
+      }
+
       setEvents(prev => {
-        const map = new Map(prev.map(e => [e.event_id, e]))
-        for (const e of incoming) map.set(e.event_id, e)
-        // Sort by acquisition_date desc, then acquisition_time desc
+        const map = new Map(prev.map(e => [e.event_id ?? `${e.latitude},${e.longitude}`, e]))
+        for (const e of incoming) map.set(e.event_id ?? `${e.latitude},${e.longitude}`, e)
         return Array.from(map.values()).sort((a, b) => {
           const dateA = a.acquisition_date ?? ''
           const dateB = b.acquisition_date ?? ''
@@ -55,8 +83,8 @@ export function useLiveData(): LiveData {
         })
       })
 
-      if (!statsRes.error)    setStatistics(statsRes)
-      if (pipelineRes.status) setPipelineStatus(pipelineRes)
+      if (!(statsRes as ApiStatistics & { error?: string }).error)    setStatistics(statsRes)
+      if ((pipelineRes as ApiPipelineStatus).status) setPipelineStatus(pipelineRes)
 
       setStatus(incoming.length === 0 ? 'empty' : 'live')
       setError(null)
@@ -77,16 +105,13 @@ export function useLiveData(): LiveData {
 
   useEffect(() => {
     let controller = new AbortController()
-
     const run = () => {
       controller = new AbortController()
       fetchAll(controller.signal).finally(() => {
         timerRef.current = setTimeout(run, POLL_INTERVAL_MS)
       })
     }
-
     run()
-
     return () => {
       controller.abort()
       if (timerRef.current) clearTimeout(timerRef.current)

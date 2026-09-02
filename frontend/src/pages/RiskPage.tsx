@@ -1,66 +1,66 @@
-﻿import React from 'react'
+import React, { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { MapPin, Satellite, Clock, ChevronRight, Flame, Cpu, Zap } from 'lucide-react'
 import { useAppContext } from '../App'
-import { MapPin, ArrowRight } from 'lucide-react'
-import { formatAcqTime, confidenceLabel, frpColor, frpTier } from '../utils/eventUtils'
-import { deriveRiskScore, deriveRiskLevel, getRiskColor, getRiskBg, getRiskBorder } from '../utils/risk'
-import type { ApiThermalEvent } from '../types/api'
+import { formatAcqTime, confidenceLabel } from '../utils/eventUtils'
+import { deriveRiskLevel, deriveRiskScore, getRiskColor } from '../utils/risk'
+import RiskBadge from '../components/RiskBadge'
+import MetricRow from '../components/MetricRow'
+import ScoreBar from '../components/ScoreBar'
+import { api } from '../services/api'
+import type { ApiPrediction } from '../types/api'
+import type { ApiEventFeatures } from '../services/api'
 
-function Card({ title, accentColor, children }: {
-  title: string; accentColor?: string; children: React.ReactNode
-}) {
+function frpColor(frp: number | null): string {
+  if (frp == null) return '#38BDF8'
+  if (frp > 500)   return '#DC2626'
+  if (frp > 200)   return '#F97316'
+  if (frp > 100)   return '#FB923C'
+  if (frp > 50)    return '#FCD34D'
+  if (frp > 20)    return '#A3E635'
+  return '#38BDF8'
+}
+function distFmt(d: number | null): string {
+  if (d == null) return 'DATA PENDING'
+  if (d < 1) return `${(d * 1000).toFixed(0)} m`
+  return `${d.toFixed(2)} km`
+}
+
+function Panel({ children, style }: { children: React.ReactNode; style?: React.CSSProperties }) {
   return (
-    <div style={{
-      background: 'var(--d4)', border: '1px solid var(--b1)',
-      borderLeft: `4px solid ${accentColor ?? 'var(--b2)'}`,
-      borderRadius: 10, overflow: 'hidden',
-    }}>
-      <div style={{ padding: '10px 16px 8px', borderBottom: '1px solid var(--b1)', background: accentColor ? `${accentColor}08` : 'transparent' }}>
-        <span style={{ fontSize: 13, fontWeight: 700, color: accentColor ?? 'var(--t2)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-          {title}
+    <div style={{ background: 'var(--d3)', border: '1px solid var(--b1)', borderRadius: 9, padding: '14px 16px', ...style }}>
+      {children}
+    </div>
+  )
+}
+function PanelTitle({ children }: { children: React.ReactNode }) {
+  return <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.14em', textTransform: 'uppercase', color: 'var(--t4)', marginBottom: 10, paddingBottom: 6, borderBottom: '1px solid var(--b1)' }}>{children}</div>
+}
+
+function FacilityRow({ label, distance, near }: { label: string; distance: number | null; near: boolean | null }) {
+  const hasData = distance != null
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '5px 0', borderBottom: '1px solid var(--b0)' }}>
+      <span style={{ fontSize: 11, color: 'var(--t3)', fontFamily: 'var(--font-mono)', letterSpacing: '0.06em', textTransform: 'uppercase' }}>{label}</span>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        {hasData && near != null && (
+          <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.1em', color: near ? 'var(--err)' : 'var(--ok)', background: near ? 'var(--err-bg)' : 'var(--ok-bg)', border: `1px solid ${near ? 'var(--err-b)' : 'var(--ok-b)'}`, borderRadius: 3, padding: '1px 5px' }}>
+            {near ? 'NEAR' : 'FAR'}
+          </span>
+        )}
+        <span style={{ fontSize: 12, fontFamily: 'var(--font-mono)', color: hasData ? 'var(--t1)' : 'var(--t4)', fontVariantNumeric: 'tabular-nums' }}>
+          {distFmt(distance)}
         </span>
       </div>
-      <div style={{ padding: '14px 16px' }}>{children}</div>
     </div>
   )
 }
 
-function Row({ label, value, accent, big }: { label: string; value: string; accent?: string; big?: boolean }) {
+function MR({ label, value }: { label: string; value: string }) {
   return (
-    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12, padding: '6px 0', borderBottom: '1px solid var(--b0)' }}>
-      <span style={{ fontSize: 12, color: 'var(--t3)', flexShrink: 0 }}>{label}</span>
-      <span style={{ fontSize: big ? 18 : 14, fontWeight: big ? 700 : 500, color: accent ?? 'var(--t1)', fontFamily: 'var(--font-mono)', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
-        {value}
-      </span>
-    </div>
-  )
-}
-
-function EmptyState({ events, setSelectedEvent }: { events: ApiThermalEvent[]; setSelectedEvent: (e: ApiThermalEvent | null) => void }) {
-  return (
-    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 20, padding: 40 }}>
-      <div style={{ width: 56, height: 56, borderRadius: '50%', border: '2px solid var(--b2)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <MapPin size={22} color="var(--t3)" strokeWidth={1.5}/>
-      </div>
-      <div style={{ textAlign: 'center' }}>
-        <div style={{ fontSize: 17, fontWeight: 700, color: 'var(--t2)', marginBottom: 8 }}>No Fire Selected</div>
-        <div style={{ fontSize: 13, color: 'var(--t4)', lineHeight: 1.7, maxWidth: 280 }}>
-          Select a fire event from the map or observation log to see its detailed analysis.
-        </div>
-      </div>
-      {events.length > 0 && (
-        <div>
-          <div style={{ fontSize: 12, color: 'var(--t4)', marginBottom: 8, textAlign: 'center' }}>Recent events:</div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, justifyContent: 'center', maxWidth: 420 }}>
-            {events.slice(0, 8).map(e => (
-              <button key={e.event_id} onClick={() => setSelectedEvent(e)} className="btn"
-                style={{ fontSize: 11, fontFamily: 'var(--font-mono)', padding: '4px 10px' }}>
-                {e.event_id?.slice(0, 20)}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
+    <div style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', borderBottom: '1px solid var(--b0)' }}>
+      <span style={{ fontSize: 10, color: 'var(--t4)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.07em' }}>{label}</span>
+      <span style={{ fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--t1)', fontVariantNumeric: 'tabular-nums' }}>{value}</span>
     </div>
   )
 }
@@ -70,233 +70,329 @@ export default function RiskPage() {
   const navigate = useNavigate()
   const ev = selectedEvent
 
-  if (status === 'loading') return (
-    <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12 }}>
-      <div style={{ width: 16, height: 16, border: '2px solid var(--cyan)', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }}/>
-      <span style={{ fontSize: 14, color: 'var(--t3)' }}>Loading…</span>
-    </div>
-  )
+  const [prediction, setPrediction] = useState<ApiPrediction | null>(null)
+  const [predLoading, setPredLoading] = useState(false)
+  const [features, setFeatures] = useState<ApiEventFeatures | null>(null)
 
-  if (!ev) return <EmptyState events={events} setSelectedEvent={setSelectedEvent}/>
+  useEffect(() => {
+    if (!ev) { setPrediction(null); setFeatures(null); return }
+    const controller = new AbortController()
+    setPredLoading(true)
+    api.predict(ev.id, controller.signal)
+      .then(r => { if (!controller.signal.aborted) setPrediction(r) })
+      .catch(() => { if (!controller.signal.aborted) setPrediction(null) })
+      .finally(() => { if (!controller.signal.aborted) setPredLoading(false) })
+    api.eventFeatures(ev.id, controller.signal)
+      .then(r => { if (!controller.signal.aborted) setFeatures(r) })
+      .catch(() => { if (!controller.signal.aborted) setFeatures(null) })
+    return () => controller.abort()
+  }, [ev?.id])
 
-  const score  = deriveRiskScore(ev)
-  const level  = deriveRiskLevel(ev)
-  const rColor = getRiskColor(level)
-  const rBg    = getRiskBg(level)
-  const rBord  = getRiskBorder(level)
-  const fc     = frpColor(ev.frp)
-
-  const levelLabels: Record<string, string> = {
-    LOW: 'Low Risk', MEDIUM: 'Moderate Risk', HIGH: 'High Risk',
-    CRITICAL: 'Critical', EXTREME: 'Extreme',
+  if (status === 'loading') {
+    return (
+      <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 10, color: 'var(--t3)' }}>
+        <div style={{ width: 20, height: 20, border: '2px solid var(--b2)', borderTopColor: 'var(--cyan)', borderRadius: '50%', animation: 'spin 0.9s linear infinite' }}/>
+        <span style={{ fontSize: 13 }}>Loading event intelligence...</span>
+      </div>
+    )
   }
 
-  return (
-    <div style={{ height: '100%', display: 'flex', overflow: 'hidden', background: 'var(--d1)' }}>
-
-      {/* Left — evidence */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: 14 }}>
-
-        {/* Event header */}
-        <div style={{
-          background: 'var(--d3)',
-          border: '1px solid var(--b1)',
-          borderTop: `4px solid ${fc}`,
-          borderRadius: 10, padding: '16px 18px',
-        }}>
-          <div style={{ fontSize: 10, color: 'var(--t4)', textTransform: 'uppercase', letterSpacing: '0.12em', marginBottom: 6, fontFamily: 'var(--font-mono)' }}>
-            Fire Event Analysis
-          </div>
-          <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 600, color: 'var(--cyan)', marginBottom: 12, wordBreak: 'break-all', lineHeight: 1.4 }}>
-            {ev.event_id ?? 'Unknown ID'}
-          </div>
-          <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 12 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <MapPin size={11} color="var(--t4)"/>
-              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--t2)' }}>
-                {ev.latitude.toFixed(4)}\u00b0, {ev.longitude.toFixed(4)}\u00b0
-              </span>
-            </div>
-            <span style={{ fontSize: 12, color: 'var(--t3)' }}>{ev.satellite ?? '\u2014'} \u00b7 {ev.instrument ?? '\u2014'}</span>
-            <span style={{ fontSize: 12, color: 'var(--t3)' }}>{ev.acquisition_date ?? '\u2014'} {formatAcqTime(ev.acquisition_time)}</span>
-          </div>
-          {/* Switcher — styled as intelligence-panel controls, not plain buttons */}
-          <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', alignItems: 'center' }}>
-            <span style={{ fontSize: 10, color: 'var(--t4)', fontFamily: 'var(--font-mono)', letterSpacing: '0.08em', marginRight: 2 }}>SWITCH:</span>
-            {events.slice(0, 6).map(e => {
-              const isActive = e.event_id === ev.event_id
-              const efc = frpColor(e.frp)
-              return (
-                <button
-                  key={e.event_id}
-                  onClick={() => setSelectedEvent(e)}
-                  style={{
-                    display: 'flex', alignItems: 'center', gap: 5,
-                    fontSize: 10, fontFamily: 'var(--font-mono)',
-                    padding: '3px 9px',
-                    borderRadius: 5,
-                    background: isActive ? `${efc}18` : 'var(--d5)',
-                    border: `1px solid ${isActive ? efc + '55' : 'var(--b2)'}`,
-                    color: isActive ? efc : 'var(--t3)',
-                    cursor: 'pointer',
-                    transition: 'all var(--ease)',
-                    outline: 'none',
-                  }}
-                  onMouseEnter={e2 => {
-                    if (!isActive) {
-                      (e2.currentTarget as HTMLButtonElement).style.background = 'var(--d6)'
-                      ;(e2.currentTarget as HTMLButtonElement).style.color = 'var(--t2)'
-                      ;(e2.currentTarget as HTMLButtonElement).style.borderColor = 'var(--b3)'
-                    }
-                  }}
-                  onMouseLeave={e2 => {
-                    if (!isActive) {
-                      (e2.currentTarget as HTMLButtonElement).style.background = 'var(--d5)'
-                      ;(e2.currentTarget as HTMLButtonElement).style.color = 'var(--t3)'
-                      ;(e2.currentTarget as HTMLButtonElement).style.borderColor = 'var(--b2)'
-                    }
-                  }}
-                >
-                  <div style={{ width: 5, height: 5, borderRadius: '50%', background: efc, flexShrink: 0 }}/>
-                  {e.event_id?.slice(0, 14)}\u2026
-                </button>
-              )
-            })}
-          </div>
+  if (!ev) {
+    return (
+      <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 12, color: 'var(--t3)' }}>
+        <Flame size={32} color="var(--t4)"/>
+        <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--t2)' }}>No Event Selected</div>
+        <div style={{ fontSize: 12, color: 'var(--t4)', textAlign: 'center', maxWidth: 280 }}>
+          Select a fire event from the Global Map or Observation Log to begin investigation.
         </div>
-
-        {/* Signal strength — score visually dominant, section itself recedes */}
-        <div style={{
-          background: 'var(--d3)',
-          border: `1px solid ${rBord}`,
-          borderLeft: `4px solid ${rColor}`,
-          borderRadius: 10, padding: '14px 18px',
-        }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
-            <div>
-              <div style={{ fontSize: 11, color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.10em', marginBottom: 4 }}>Signal Strength</div>
-              <div style={{ fontSize: 12, color: 'var(--t4)', lineHeight: 1.6, maxWidth: 280 }}>
-                Calculated from fire intensity, brightness and detection confidence.{' '}
-                <strong style={{ color: 'var(--t3)' }}>Not an AI prediction.</strong>
-              </div>
-            </div>
-            <div style={{ textAlign: 'right', flexShrink: 0, marginLeft: 16 }}>
-              <div style={{ fontSize: 44, fontWeight: 900, color: rColor, lineHeight: 1, fontVariantNumeric: 'tabular-nums', fontFamily: 'var(--font-mono)' }}>
-                {score}
-              </div>
-              <div style={{ fontSize: 11, color: 'var(--t4)' }}>out of 100</div>
-            </div>
-          </div>
-          <div style={{ height: 6, background: 'rgba(0,0,0,0.3)', borderRadius: 6, marginBottom: 10, overflow: 'hidden' }}>
-            <div style={{ width: `${score}%`, height: '100%', borderRadius: 6, background: `linear-gradient(90deg, ${rColor}70, ${rColor})`, transition: 'width 0.6s ease' }}/>
-          </div>
-          <span style={{
-            display: 'inline-flex', alignItems: 'center', gap: 6,
-            fontSize: 13, fontWeight: 700, color: rColor,
-            background: `${rColor}14`, border: `1px solid ${rColor}40`,
-            borderRadius: 6, padding: '4px 12px',
-          }}>
-            <div style={{ width: 6, height: 6, borderRadius: '50%', background: rColor }}/>
-            {levelLabels[level] ?? level}
-          </span>
-        </div>
-
-        {/* Fire signal */}
-        <Card title="Fire Signal" accentColor="var(--amber)">
-          <Row label="Fire Radiative Power" value={ev.frp  != null ? `${ev.frp.toLocaleString()} MW`   : '—'} accent={fc} big/>
-          <Row label="Brightness Temp"      value={ev.brightness != null ? `${ev.brightness.toFixed(1)} K` : '—'}/>
-          <Row label="Detection Confidence" value={confidenceLabel(ev.confidence)}/>
-          <Row label="Day or Night"         value={ev.daynight === 'D' ? 'Daytime' : ev.daynight === 'N' ? 'Nighttime' : '—'}/>
-          <Row label="Intensity Level"      value={frpTier(ev.frp)} accent={fc}/>
-        </Card>
-
-        {/* Satellite */}
-        <Card title="Satellite Information" accentColor="var(--cyan)">
-          <Row label="Satellite"     value={ev.satellite    ?? '—'}/>
-          <Row label="Instrument"    value={ev.instrument   ?? '—'}/>
-          <Row label="Data Source"   value={ev.firms_source ?? '—'}/>
-          <Row label="Date"          value={ev.acquisition_date ?? '—'}/>
-          <Row label="Time"          value={formatAcqTime(ev.acquisition_time)}/>
-          <Row label="Latitude"      value={`${ev.latitude.toFixed(5)}°`}/>
-          <Row label="Longitude"     value={`${ev.longitude.toFixed(5)}°`}/>
-        </Card>
-
-        {/* Land cover */}
-        <Card title="Land Cover" accentColor="var(--ok)">
-          <Row label="Cover Type"
-            value={ev.worldcover_class_name ?? (ev.worldcover_version != null ? 'No data' : 'Pending enrichment')}
-            accent={ev.worldcover_class_name ? 'var(--t1)' : 'var(--t4)'}/>
-          <Row label="Version"      value={ev.worldcover_version ?? '—'}/>
-          <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 7 }}>
-            <div style={{ width: 6, height: 6, borderRadius: '50%', background: ev.worldcover_version != null ? 'var(--ok)' : 'var(--t4)' }}/>
-            <span style={{ fontSize: 12, color: 'var(--t3)' }}>
-              {ev.worldcover_version != null ? 'Land cover data available' : 'Land cover enrichment pending'}
-            </span>
-          </div>
-        </Card>
-
-        <button className="btn btn-teal" onClick={() => navigate('/map')}
-          style={{ alignSelf: 'flex-start', gap: 6, fontSize: 13, padding: '8px 16px' }}>
-          View on Map <ArrowRight size={13}/>
+        <button onClick={() => navigate('/map')} className="btn btn-cyan" style={{ marginTop: 4 }}>
+          Open Global Map <ChevronRight size={12}/>
         </button>
       </div>
+    )
+  }
 
-        {/* Right — ML pending: calmer treatment, distinct from populated sections */}
-      <div style={{
-        width: 300, minWidth: 300, overflowY: 'auto', padding: '18px 16px',
-        borderLeft: '1px solid var(--b1)', background: 'var(--d2)',
-        display: 'flex', flexDirection: 'column', gap: 10,
-      }}>
-        {/* ML notice — violet accent, but not screaming */}
-        <div style={{
-          background: 'var(--d3)',
-          border: '1px solid var(--b1)',
-          borderLeft: '3px solid var(--violet)',
-          borderRadius: 10, padding: '14px 16px',
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 8 }}>
-            <div style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--violet)', flexShrink: 0 }}/>
-            <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--violet)', letterSpacing: '0.06em' }}>AI Risk Scoring</span>
-            <span style={{
-              fontSize: 10, fontWeight: 700, color: 'var(--violet)',
-              background: 'var(--violet-bg)', border: '1px solid var(--violet-border)',
-              borderRadius: 4, padding: '1px 6px', fontFamily: 'var(--font-mono)',
-              marginLeft: 'auto', letterSpacing: '0.08em',
-            }}>PENDING</span>
+  const riskLevel = deriveRiskLevel(ev)
+  const riskScore = deriveRiskScore(ev)
+  const riskColor = getRiskColor(riskLevel)
+  const frpC = frpColor(ev.frp)
+  const osmEnriched = ev.osm_enrichment_status === 'enriched'
+  const wcEnriched = ev.worldcover_class_name != null
+  const hasTemporalData = features?.detections_7d != null
+  const hasAnomalyData = features?.frp_deviation != null
+
+  return (
+    <div style={{ height: '100%', overflowY: 'auto', padding: '16px 20px', background: 'var(--d1)' }}>
+
+      {/* Event header */}
+      <div style={{ background: 'var(--d3)', border: '1px solid var(--b1)', borderRadius: 9, padding: '16px 20px', marginBottom: 14 }}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
+          <div>
+            <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.14em', color: 'var(--cyan)', textTransform: 'uppercase', marginBottom: 4 }}>Fire Event Analysis</div>
+            <div style={{ fontFamily: 'var(--font-mono)', fontSize: 18, fontWeight: 800, color: 'var(--t1)', marginBottom: 8, letterSpacing: '-0.01em' }}>
+              {ev.event_id ?? `ID ${ev.id}`}
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 14 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                <MapPin size={11} color="var(--t4)"/>
+                <span style={{ fontSize: 12, color: 'var(--t3)', fontFamily: 'var(--font-mono)' }}>{ev.latitude.toFixed(4)}, {ev.longitude.toFixed(4)}</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                <Satellite size={11} color="var(--t4)"/>
+                <span style={{ fontSize: 12, color: 'var(--t3)' }}>{ev.satellite ?? 'Unknown'} · {ev.instrument ?? 'Unknown'}</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                <Clock size={11} color="var(--t4)"/>
+                <span style={{ fontSize: 12, color: 'var(--t3)', fontFamily: 'var(--font-mono)' }}>{ev.acquisition_date ?? 'Unknown'} · {formatAcqTime(ev.acquisition_time)}</span>
+              </div>
+            </div>
           </div>
-          <p style={{ fontSize: 12, color: 'var(--t4)', lineHeight: 1.7 }}>
-            AI pipeline not yet connected. Once integrated, this panel shows composite risk scores and anomaly analysis.
-          </p>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8 }}>
+            <RiskBadge level={riskLevel} size="md"/>
+            <div style={{ fontSize: 11, color: 'var(--t4)' }}>Thermal signal · not ML</div>
+          </div>
         </div>
 
-        {/* Risk components — calmer, subdued */}
-        <div style={{ background: 'var(--d3)', border: '1px solid var(--b1)', borderRadius: 10, padding: '12px 16px' }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--t3)', marginBottom: 10, textTransform: 'uppercase', letterSpacing: '0.08em' }}>Risk Components</div>
-          {['Composite Risk Score', 'Fire Persistence', 'Spatial Proximity Score', 'Anomaly Score', 'Land Cover Risk', 'Temporal Behaviour'].map(l => (
-            <div key={l} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', borderBottom: '1px solid var(--b0)' }}>
-              <span style={{ fontSize: 12, color: 'var(--t4)' }}>{l}</span>
-              <span style={{
-                fontSize: 10, fontWeight: 600, color: 'var(--t4)',
-                background: 'var(--d5)', border: '1px solid var(--b1)',
-                borderRadius: 4, padding: '1px 6px', fontFamily: 'var(--font-mono)',
-              }}>pending</span>
-            </div>
-          ))}
-        </div>
+        {events.length > 1 && (
+          <div style={{ marginTop: 12, paddingTop: 10, borderTop: '1px solid var(--b1)', display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+            {events.slice(0, 10).map(e => (
+              <button
+                key={e.id}
+                onClick={() => setSelectedEvent(e)}
+                style={{
+                  padding: '2px 8px', borderRadius: 4, fontSize: 10, fontFamily: 'var(--font-mono)',
+                  border: `1px solid ${e.id === ev.id ? 'var(--cyan-border)' : 'var(--b1)'}`,
+                  background: e.id === ev.id ? 'var(--cyan-bg)' : 'transparent',
+                  color: e.id === ev.id ? 'var(--cyan)' : 'var(--t4)',
+                  cursor: 'pointer',
+                }}
+              >
+                {(e.event_id ?? `#${e.id}`).slice(0, 14)}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
 
-        {/* Facilities — same subdued pending treatment */}
-        <div style={{ background: 'var(--d3)', border: '1px solid var(--b1)', borderRadius: 10, padding: '12px 16px' }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--t3)', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.08em' }}>Nearby Facilities</div>
-          <p style={{ fontSize: 12, color: 'var(--t4)', lineHeight: 1.6, marginBottom: 10 }}>
-            OSM proximity data is being enriched in the background.
-          </p>
-          {['Industrial zone', 'Refinery', 'Power plant', 'Mine', 'Gas facility'].map(l => (
-            <div key={l} style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderBottom: '1px solid var(--b0)' }}>
-              <span style={{ fontSize: 12, color: 'var(--t4)' }}>{l}</span>
-              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--t4)' }}>\u2014</span>
+      {/* Row 1: Thermal / OSM / Land Cover */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 12 }}>
+
+        <Panel>
+          <PanelTitle>Thermal Profile</PanelTitle>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+            <div style={{ textAlign: 'center' }}>
+              <div style={{ fontSize: 32, fontWeight: 800, color: frpC, fontVariantNumeric: 'tabular-nums', lineHeight: 1, fontFamily: 'var(--font-mono)' }}>
+                {ev.frp != null ? ev.frp.toLocaleString() : 'N/A'}
+              </div>
+              <div style={{ fontSize: 9, color: 'var(--t4)', letterSpacing: '0.1em', marginTop: 2 }}>MW FRP</div>
             </div>
-          ))}
-        </div>
+            <div style={{ flex: 1 }}>
+              <ScoreBar score={Math.min(100, (ev.frp ?? 0) / 30)} color={frpC} height={5}/>
+              <div style={{ fontSize: 9, color: 'var(--t4)', marginTop: 3 }}>Intensity relative to 3000 MW</div>
+            </div>
+          </div>
+          <MetricRow label="Brightness" value={ev.brightness != null ? `${ev.brightness.toFixed(1)} K` : 'DATA PENDING'} mono/>
+          <MetricRow label="Confidence" value={confidenceLabel(ev.confidence)} mono/>
+          <MetricRow label="Day / Night" value={ev.daynight === 'D' ? 'Daytime' : ev.daynight === 'N' ? 'Nighttime' : 'Unknown'}/>
+          <MetricRow label="Source" value={ev.firms_source ?? 'Unknown'} mono/>
+        </Panel>
+
+        <Panel>
+          <PanelTitle>Spatial Context — OSM</PanelTitle>
+          {osmEnriched ? (
+            <>
+              <FacilityRow label="Road" distance={ev.distance_to_road} near={null}/>
+              <FacilityRow label="Industrial" distance={ev.distance_to_industrial} near={ev.near_industrial_facility}/>
+              <FacilityRow label="Refinery" distance={ev.distance_to_refinery} near={ev.near_refinery}/>
+              <FacilityRow label="Power Plant" distance={ev.distance_to_powerplant} near={ev.near_powerplant}/>
+              <FacilityRow label="Mine" distance={ev.distance_to_mine} near={ev.near_mine}/>
+              <FacilityRow label="Gas Facility" distance={ev.distance_to_gas_facility} near={ev.near_gas_facility}/>
+              <div style={{ marginTop: 8, fontSize: 9, color: 'var(--t4)', fontFamily: 'var(--font-mono)' }}>
+                Source: {ev.osm_source_version ?? 'overpass-osm'} · {ev.osm_enriched_at ? new Date(ev.osm_enriched_at).toLocaleDateString() : ''}
+              </div>
+            </>
+          ) : (
+            <div style={{ padding: '20px 0', textAlign: 'center' }}>
+              <div style={{ fontSize: 12, color: 'var(--t4)', marginBottom: 4 }}>
+                {ev.osm_enrichment_status === 'pending' ? 'OSM Enrichment In Progress' : 'OSM Enrichment Pending'}
+              </div>
+              <div style={{ fontSize: 10, color: 'var(--t4)', lineHeight: 1.6 }}>
+                Overpass API query scheduled.<br/>Infrastructure distances will appear here.
+              </div>
+            </div>
+          )}
+        </Panel>
+
+        <Panel>
+          <PanelTitle>Land Cover — WorldCover v200</PanelTitle>
+          {wcEnriched ? (
+            <>
+              <div style={{ marginBottom: 12 }}>
+                <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--ok)', marginBottom: 2 }}>{ev.worldcover_class_name}</div>
+                <div style={{ fontSize: 10, color: 'var(--t4)', fontFamily: 'var(--font-mono)' }}>
+                  Class {ev.worldcover_class_code} · {ev.worldcover_version ?? 'v200'}
+                </div>
+              </div>
+              {features?.wc_forest_pct != null && <MR label="Forest" value={`${features.wc_forest_pct.toFixed(1)}%`}/>}
+              {features?.wc_cropland_pct != null && <MR label="Cropland" value={`${features.wc_cropland_pct.toFixed(1)}%`}/>}
+              {features?.wc_grassland_pct != null && <MR label="Grassland" value={`${features.wc_grassland_pct.toFixed(1)}%`}/>}
+              {features?.wc_builtup_pct != null && <MR label="Built-up" value={`${features.wc_builtup_pct.toFixed(1)}%`}/>}
+              {features?.wc_water_pct != null && <MR label="Water" value={`${features.wc_water_pct.toFixed(1)}%`}/>}
+            </>
+          ) : (
+            <div style={{ padding: '20px 0', textAlign: 'center' }}>
+              <div style={{ fontSize: 12, color: 'var(--t4)', marginBottom: 4 }}>
+                {ev.worldcover_enrichment_status === 'pending' ? 'WorldCover Enrichment Pending' : 'Awaiting Enrichment'}
+              </div>
+              <div style={{ fontSize: 10, color: 'var(--t4)', lineHeight: 1.6 }}>
+                ESA WorldCover 10m classification<br/>will appear after enrichment.
+              </div>
+            </div>
+          )}
+        </Panel>
+      </div>
+
+      {/* Row 2: Temporal / Anomaly */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+
+        <Panel>
+          <PanelTitle>Temporal Behaviour</PanelTitle>
+          {hasTemporalData ? (
+            <>
+              <MR label="7D Detections" value={String(features!.detections_7d)}/>
+              <MR label="30D Detections" value={String(features!.detections_30d ?? 'N/A')}/>
+              <MR label="90D Detections" value={String(features!.detections_90d ?? 'N/A')}/>
+              <MR label="Mean FRP 30D" value={features!.mean_frp_30d != null ? `${features!.mean_frp_30d.toFixed(1)} MW` : 'N/A'}/>
+              <MR label="Max FRP 30D" value={features!.max_frp_30d != null ? `${features!.max_frp_30d.toFixed(1)} MW` : 'N/A'}/>
+              <MR label="Mean Brightness 30D" value={features!.mean_brightness_30d != null ? `${features!.mean_brightness_30d.toFixed(1)} K` : 'N/A'}/>
+              <MR label="Active Days 30D" value={String(features!.days_active_30d ?? 'N/A')}/>
+              <MR label="Persistence Score" value={features!.persistence_score != null ? features!.persistence_score.toFixed(4) : 'N/A'}/>
+            </>
+          ) : (
+            <div style={{ padding: '16px 0', textAlign: 'center' }}>
+              <div style={{ fontSize: 12, color: 'var(--t4)', marginBottom: 4 }}>Temporal Data Pending</div>
+              <div style={{ fontSize: 10, color: 'var(--t4)', lineHeight: 1.6 }}>
+                Historical detection counts and FRP statistics<br/>will appear after temporal computation.
+              </div>
+            </div>
+          )}
+        </Panel>
+
+        <Panel>
+          <PanelTitle>Historical Anomaly</PanelTitle>
+          {hasAnomalyData ? (
+            <>
+              <MR label="FRP Deviation" value={features!.frp_deviation!.toFixed(2)}/>
+              <MR label="FRP Ratio" value={features!.frp_ratio != null ? features!.frp_ratio.toFixed(4) : 'N/A'}/>
+              <MR label="Brightness Deviation" value={features!.brightness_deviation != null ? features!.brightness_deviation.toFixed(2) : 'N/A'}/>
+              <MR label="Brightness Ratio" value={features!.brightness_ratio != null ? features!.brightness_ratio.toFixed(4) : 'N/A'}/>
+              <div style={{ marginTop: 10, fontSize: 10, color: 'var(--t4)', lineHeight: 1.6, padding: '8px 10px', background: 'var(--d4)', borderRadius: 6, border: '1px solid var(--b0)' }}>
+                Deviation = current minus 30-day mean. Ratio = current divided by 30-day mean.
+              </div>
+            </>
+          ) : (
+            <div style={{ padding: '16px 0', textAlign: 'center' }}>
+              <div style={{ fontSize: 12, color: 'var(--t4)', marginBottom: 4 }}>Anomaly Data Pending</div>
+              <div style={{ fontSize: 10, color: 'var(--t4)', lineHeight: 1.6 }}>
+                FRP and brightness anomaly scores<br/>will appear after temporal computation.
+              </div>
+            </div>
+          )}
+        </Panel>
+      </div>
+
+      {/* Row 3: Thermal Signal Score / AI Classification */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+
+        <Panel>
+          <PanelTitle>Thermal Signal Score</PanelTitle>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 14 }}>
+            <div style={{ textAlign: 'center' }}>
+              <div style={{ fontSize: 40, fontWeight: 900, color: riskColor, lineHeight: 1, fontVariantNumeric: 'tabular-nums' }}>{riskScore}</div>
+              <div style={{ fontSize: 9, color: 'var(--t4)', letterSpacing: '0.1em', marginTop: 2 }}>SCORE</div>
+            </div>
+            <div style={{ flex: 1 }}>
+              <ScoreBar score={riskScore} height={6}/>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 4 }}>
+                <span style={{ fontSize: 9, color: 'var(--t4)' }}>LOW</span>
+                <span style={{ fontSize: 9, color: 'var(--t4)' }}>EXTREME</span>
+              </div>
+            </div>
+          </div>
+          <div style={{ fontSize: 10, color: 'var(--t4)', lineHeight: 1.6, padding: '8px 10px', background: 'var(--d4)', borderRadius: 6, border: '1px solid var(--b0)' }}>
+            Score derived from FRP and brightness thresholds. Not a machine learning prediction.
+          </div>
+        </Panel>
+
+        <Panel style={{ borderColor: 'var(--violet-border)', background: 'rgba(139,92,246,0.04)' }}>
+          <PanelTitle>AI Classification</PanelTitle>
+          {predLoading ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '16px 0', color: 'var(--t4)' }}>
+              <div style={{ width: 14, height: 14, border: '2px solid var(--b2)', borderTopColor: 'var(--violet)', borderRadius: '50%', animation: 'spin 0.9s linear infinite' }}/>
+              <span style={{ fontSize: 12 }}>Running inference...</span>
+            </div>
+          ) : prediction?.prediction ? (() => {
+            const cls = prediction.prediction.class
+            const conf = prediction.prediction.confidence
+            const clsColor = cls === 'wildfire' ? 'var(--err)'
+              : cls === 'industrial_thermal_source' ? 'var(--amber)'
+              : cls === 'agricultural_burning' ? 'var(--warn)'
+              : 'var(--t3)'
+            const clsLabel = cls.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
+            const fc = prediction.feature_completeness
+            return (
+              <>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14, padding: '10px 12px', background: 'var(--d4)', borderRadius: 7, border: `1px solid ${clsColor}33` }}>
+                  <div style={{ width: 10, height: 10, borderRadius: '50%', background: clsColor, boxShadow: `0 0 8px ${clsColor}`, flexShrink: 0 }}/>
+                  <div>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: clsColor }}>{clsLabel}</div>
+                    <div style={{ fontSize: 10, color: 'var(--t4)', marginTop: 1 }}>{(conf * 100).toFixed(1)}% confidence · {prediction.prediction.model}</div>
+                  </div>
+                </div>
+                <MetricRow label="Predicted Class" value={clsLabel} mono/>
+                <MetricRow label="Confidence" value={`${(conf * 100).toFixed(1)}%`} mono/>
+                <MetricRow label="Model" value={prediction.prediction.model} mono/>
+                {fc && (
+                  <>
+                    <div style={{ marginTop: 10, marginBottom: 4, fontSize: 9, fontWeight: 700, letterSpacing: '0.1em', color: 'var(--t4)', textTransform: 'uppercase' }}>Feature Completeness</div>
+                    {([['OSM', fc.osm_ready], ['Temporal', fc.temporal_ready], ['WorldCover', fc.worldcover_ready]] as [string, boolean][]).map(([lbl, ready]) => (
+                      <div key={lbl} style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0', borderBottom: '1px solid var(--b0)' }}>
+                        <span style={{ fontSize: 10, color: 'var(--t4)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.07em' }}>{lbl}</span>
+                        <span style={{ fontSize: 10, fontFamily: 'var(--font-mono)', color: ready ? 'var(--ok)' : 'var(--warn)', fontWeight: 600 }}>{ready ? 'READY' : 'PENDING'}</span>
+                      </div>
+                    ))}
+                  </>
+                )}
+              </>
+            )
+          })() : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '12px 0' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <Cpu size={16} color="var(--t4)"/>
+                <span style={{ fontSize: 12, color: 'var(--t3)', fontWeight: 600 }}>ML Pipeline</span>
+                <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.1em', color: 'var(--warn)', background: 'var(--warn-bg)', border: '1px solid var(--warn-b)', borderRadius: 3, padding: '2px 6px', marginLeft: 'auto' }}>INSTALL XGBOOST</span>
+              </div>
+              <div style={{ fontSize: 10, color: 'var(--t4)', lineHeight: 1.6 }}>
+                {prediction?.status === 'model_not_found'
+                  ? 'Model file not found. Run train.py to generate saved_model.json.'
+                  : 'Backend error — install xgboost in venv: pip install xgboost==2.1.1'}
+              </div>
+            </div>
+          )}
+        </Panel>
+      </div>
+
+      {/* Footer nav */}
+      <div style={{ marginTop: 14, display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+        <button onClick={() => navigate('/map')} className="btn">
+          <MapPin size={11}/> View on Map
+        </button>
+        <button onClick={() => navigate('/explain')} className="btn btn-cyan">
+          <Zap size={11}/> SHAP Explain
+        </button>
+        <button onClick={() => navigate('/facilities')} className="btn">
+          <ChevronRight size={11}/> Infrastructure
+        </button>
       </div>
     </div>
   )

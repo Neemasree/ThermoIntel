@@ -362,6 +362,10 @@ def get_events(
     firms_source: Optional[str] = Query(default=None),
     worldcover_class_code: Optional[int] = Query(default=None),
     osm_status: Optional[str] = Query(default=None),
+    lat_min: Optional[float] = Query(default=None),
+    lat_max: Optional[float] = Query(default=None),
+    lon_min: Optional[float] = Query(default=None),
+    lon_max: Optional[float] = Query(default=None),
 ) -> dict:
     try:
         conditions: List[str] = []
@@ -384,6 +388,14 @@ def get_events(
             params.append(worldcover_class_code)
         if osm_status:
             conditions.append("osm_enrichment_status = %s"); params.append(osm_status)
+        if lat_min is not None:
+            conditions.append("latitude >= %s"); params.append(lat_min)
+        if lat_max is not None:
+            conditions.append("latitude <= %s"); params.append(lat_max)
+        if lon_min is not None:
+            conditions.append("longitude >= %s"); params.append(lon_min)
+        if lon_max is not None:
+            conditions.append("longitude <= %s"); params.append(lon_max)
 
         where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
 
@@ -566,6 +578,274 @@ def feature_completeness() -> dict:
         }
     except Exception as exc:
         logger.error("feature-completeness error: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc)[:200])
+
+
+# =============================================================================
+# NEW ENDPOINT — /events/{id}/predict  (XGBoost inference)
+# =============================================================================
+
+_cached_model = None
+
+def _get_model():
+    global _cached_model
+    if _cached_model is None:
+        from app.ml.pipeline import load_model
+        _cached_model = load_model()
+    return _cached_model
+
+
+@app.get("/events/{event_db_id}/predict")
+def predict_event(event_db_id: int) -> dict:
+    """
+    Run XGBoost inference for one event using its ML-ready feature row.
+    Returns predicted class, confidence, and feature completeness flags.
+    """
+    import pandas as pd
+    from app.ml.features import prepare_features
+    from app.ml.labels import INT_TO_LABEL
+    import numpy as np
+
+    # Check model exists
+    import os
+    model_path = os.path.join(os.path.dirname(__file__), "ml", "saved_model.json")
+    if not os.path.exists(model_path):
+        return {"event_id": None, "prediction": None, "status": "model_not_found"}
+
+    try:
+        with get_db_cursor() as cur:
+            cur.execute("""
+                SELECT
+                    event_id,
+                    brightness, frp, confidence, daynight, scan, track,
+                    distance_to_industrial, distance_to_refinery,
+                    distance_to_powerplant, distance_to_mine,
+                    distance_to_gas_facility, distance_to_road,
+                    near_industrial_facility, near_refinery, near_powerplant,
+                    near_mine, near_gas_facility,
+                    wc_forest_pct, wc_cropland_pct, wc_grassland_pct,
+                    wc_builtup_pct, wc_water_pct,
+                    detections_7d, detections_30d, detections_90d,
+                    mean_frp_30d, max_frp_30d, mean_brightness_30d,
+                    days_active_30d, persistence_score,
+                    frp_deviation, frp_ratio, brightness_deviation, brightness_ratio,
+                    osm_enrichment_status, worldcover_version, temporal_computed_at
+                FROM thermal_events
+                WHERE id = %s
+            """, (event_db_id,))
+            row = cur.fetchone()
+
+        if row is None:
+            raise HTTPException(status_code=404, detail=f"Event {event_db_id} not found")
+
+        (
+            event_id,
+            brightness, frp, confidence, daynight, scan, track,
+            d_ind, d_ref, d_pow, d_mine, d_gas, d_road,
+            n_ind, n_ref, n_pow, n_mine, n_gas,
+            wc_forest, wc_crop, wc_grass, wc_built, wc_water,
+            det7, det30, det90, mean_frp, max_frp, mean_brt,
+            days_active, persistence,
+            frp_dev, frp_rat, brt_dev, brt_rat,
+            osm_status, wc_version, temporal_at,
+        ) = row
+
+        # Build DataFrame with model field names
+        record = {
+            "brightness":               brightness,
+            "frp":                      frp,
+            "confidence":               confidence,
+            "day_night":                daynight,   # model uses day_night
+            "scan":                     scan,
+            "track":                    track,
+            "distance_to_industrial":   d_ind,
+            "distance_to_refinery":     d_ref,
+            "distance_to_powerplant":   d_pow,
+            "distance_to_mine":         d_mine,
+            "distance_to_gas_facility": d_gas,
+            "distance_to_road":         d_road,
+            "near_industrial_facility": int(n_ind) if n_ind is not None else None,
+            "near_refinery":            int(n_ref) if n_ref is not None else None,
+            "near_powerplant":          int(n_pow) if n_pow is not None else None,
+            "near_mine":                int(n_mine) if n_mine is not None else None,
+            "near_gas_facility":        int(n_gas) if n_gas is not None else None,
+            "forest_pct":               wc_forest,  # model uses forest_pct
+            "cropland_pct":             wc_crop,
+            "grassland_pct":            wc_grass,
+            "builtup_pct":              wc_built,
+            "water_pct":                wc_water,
+            "detections_7d":            det7,
+            "detections_30d":           det30,
+            "detections_90d":           det90,
+            "mean_frp_30d":             mean_frp,
+            "max_frp_30d":              max_frp,
+            "mean_brightness_30d":      mean_brt,
+            "days_active_30d":          days_active,
+            "persistence_score":        persistence,
+            "frp_deviation":            frp_dev,
+            "frp_ratio":                frp_rat,
+            "brightness_deviation":     brt_dev,
+            "brightness_ratio":         brt_rat,
+        }
+
+        df = pd.DataFrame([record])
+        model = _get_model()
+        X = prepare_features(df)
+        preds = model.predict(X)
+        proba = model.predict_proba(X)
+        predicted_class = INT_TO_LABEL[int(preds[0])]
+        confidence_score = float(np.max(proba[0]))
+
+        return {
+            "event_id": event_id,
+            "prediction": {
+                "class":      predicted_class,
+                "confidence": round(confidence_score, 4),
+                "model":      "XGBoost",
+            },
+            "feature_completeness": {
+                "osm_ready":       osm_status == "enriched",
+                "temporal_ready":  temporal_at is not None,
+                "worldcover_ready": wc_version is not None,
+            },
+            "status": "ok",
+        }
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("GET /events/%d/predict error: %s", event_db_id, exc)
+        raise HTTPException(status_code=500, detail=str(exc)[:200])
+
+
+# =============================================================================
+# NEW ENDPOINT — /events/{id}/explain  (SHAP explainability)
+# =============================================================================
+
+_cached_explainer = None
+
+def _get_explainer():
+    global _cached_explainer
+    if _cached_explainer is None:
+        import shap
+        model = _get_model()
+        _cached_explainer = shap.TreeExplainer(model)
+    return _cached_explainer
+
+
+@app.get("/events/{event_db_id}/explain")
+def explain_event(event_db_id: int) -> dict:
+    """
+    Return SHAP feature importance values for one event.
+    Requires the model to be trained and saved.
+    """
+    import pandas as pd
+    import numpy as np
+    from app.ml.features import prepare_features
+    from app.ml.labels import INT_TO_LABEL
+
+    model_path = os.path.join(os.path.dirname(__file__), "ml", "saved_model.json")
+    if not os.path.exists(model_path):
+        return {"event_id": None, "shap_values": None, "status": "model_not_found"}
+
+    try:
+        with get_db_cursor() as cur:
+            cur.execute("""
+                SELECT
+                    event_id,
+                    brightness, frp, confidence, daynight, scan, track,
+                    distance_to_industrial, distance_to_refinery,
+                    distance_to_powerplant, distance_to_mine,
+                    distance_to_gas_facility, distance_to_road,
+                    near_industrial_facility, near_refinery, near_powerplant,
+                    near_mine, near_gas_facility,
+                    wc_forest_pct, wc_cropland_pct, wc_grassland_pct,
+                    wc_builtup_pct, wc_water_pct,
+                    detections_7d, detections_30d, detections_90d,
+                    mean_frp_30d, max_frp_30d, mean_brightness_30d,
+                    days_active_30d, persistence_score,
+                    frp_deviation, frp_ratio, brightness_deviation, brightness_ratio
+                FROM thermal_events
+                WHERE id = %s
+            """, (event_db_id,))
+            row = cur.fetchone()
+
+        if row is None:
+            raise HTTPException(status_code=404, detail=f"Event {event_db_id} not found")
+
+        (
+            event_id,
+            brightness, frp, confidence, daynight, scan, track,
+            d_ind, d_ref, d_pow, d_mine, d_gas, d_road,
+            n_ind, n_ref, n_pow, n_mine, n_gas,
+            wc_forest, wc_crop, wc_grass, wc_built, wc_water,
+            det7, det30, det90, mean_frp, max_frp, mean_brt,
+            days_active, persistence,
+            frp_dev, frp_rat, brt_dev, brt_rat,
+        ) = row
+
+        record = {
+            "brightness": brightness, "frp": frp, "confidence": confidence,
+            "day_night": daynight, "scan": scan, "track": track,
+            "distance_to_industrial": d_ind, "distance_to_refinery": d_ref,
+            "distance_to_powerplant": d_pow, "distance_to_mine": d_mine,
+            "distance_to_gas_facility": d_gas, "distance_to_road": d_road,
+            "near_industrial_facility": int(n_ind) if n_ind is not None else None,
+            "near_refinery": int(n_ref) if n_ref is not None else None,
+            "near_powerplant": int(n_pow) if n_pow is not None else None,
+            "near_mine": int(n_mine) if n_mine is not None else None,
+            "near_gas_facility": int(n_gas) if n_gas is not None else None,
+            "forest_pct": wc_forest, "cropland_pct": wc_crop,
+            "grassland_pct": wc_grass, "builtup_pct": wc_built, "water_pct": wc_water,
+            "detections_7d": det7, "detections_30d": det30, "detections_90d": det90,
+            "mean_frp_30d": mean_frp, "max_frp_30d": max_frp,
+            "mean_brightness_30d": mean_brt, "days_active_30d": days_active,
+            "persistence_score": persistence,
+            "frp_deviation": frp_dev, "frp_ratio": frp_rat,
+            "brightness_deviation": brt_dev, "brightness_ratio": brt_rat,
+        }
+
+        df = pd.DataFrame([record])
+        model = _get_model()
+        X = prepare_features(df)
+        model_features = model.get_booster().feature_names
+        if list(X.columns) != model_features or len(model_features) != 32:
+            raise ValueError("Prepared feature contract does not match the model")
+
+        preds = model.predict(X)
+        predicted_class_idx = int(preds[0])
+        predicted_class = INT_TO_LABEL[predicted_class_idx]
+
+        explainer = _get_explainer()
+        shap_vals = np.asarray(explainer.shap_values(X))
+        if shap_vals.shape != (len(X), len(model_features), model.n_classes_):
+            raise ValueError(f"Unexpected SHAP output shape: {shap_vals.shape}")
+
+        feature_names = list(X.columns)
+        class_shap = shap_vals[0, :, predicted_class_idx].tolist()
+
+        contributions = [
+            {"feature": name, "shap_value": round(float(val), 6)}
+            for name, val in zip(feature_names, class_shap)
+        ]
+        ranked_contributions = sorted(
+            contributions,
+            key=lambda x: abs(x["shap_value"]),
+            reverse=True,
+        )
+
+        return {
+            "event_id": event_id,
+            "predicted_class": predicted_class,
+            "top_features": ranked_contributions[:15],
+            "all_features": contributions,
+            "status": "ok",
+        }
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("GET /events/%d/explain error: %s", event_db_id, exc)
         raise HTTPException(status_code=500, detail=str(exc)[:200])
 
 

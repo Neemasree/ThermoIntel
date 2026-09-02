@@ -1,232 +1,185 @@
-import React from 'react'
-import { Flame, Satellite, TrendingUp, Calendar, Database, WifiOff } from 'lucide-react'
+import React, { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { Flame, Satellite, AlertCircle, Loader, TrendingUp, Globe } from 'lucide-react'
 import { useAppContext } from '../App'
-import { frpColor, formatAcqTime, confidenceLabel, frpTier } from '../utils/eventUtils'
-import EventInspector from '../components/EventInspector'
-import MapPanel from '../components/MapPanel'
+import { formatAcqTime, confidenceLabel } from '../utils/eventUtils'
+import type { ApiThermalEvent } from '../types/api'
 
-function StatCard({ label, value, sub, accent, icon: Icon }: {
-  label: string; value: string; sub?: string; accent?: string; icon?: React.ElementType
-}) {
-  return (
-    <div style={{
-      flex: '1 1 0', minWidth: 120,
-      background: 'var(--d4)', border: '1px solid var(--b1)',
-      borderTop: `3px solid ${accent ?? 'var(--b2)'}`,
-      borderRadius: 10, padding: '12px 16px',
-      display: 'flex', flexDirection: 'column', gap: 4,
-    }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-        {Icon && <Icon size={14} color={accent ?? 'var(--t3)'} strokeWidth={1.8}/>}
-        <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-          {label}
-        </span>
-      </div>
-      <div style={{ fontSize: 26, fontWeight: 800, color: accent ?? 'var(--t1)', lineHeight: 1, fontVariantNumeric: 'tabular-nums', letterSpacing: '-0.02em' }}>
-        {value}
-      </div>
-      {sub && <div style={{ fontSize: 11, color: 'var(--t4)' }}>{sub}</div>}
-    </div>
-  )
+function frpColor(frp: number | null): string {
+  if (frp == null) return '#38BDF8'
+  if (frp > 2000)  return '#DC2626'
+  if (frp > 1000)  return '#EF4444'
+  if (frp > 500)   return '#F97316'
+  if (frp > 200)   return '#FB923C'
+  if (frp > 50)    return '#FCD34D'
+  return '#38BDF8'
 }
 
-function EventRow({ ev, selected, onSelect, isNewest }: {
-  ev: ReturnType<typeof useAppContext>['events'][0]
-  selected: boolean; onSelect: () => void; isNewest: boolean
-}) {
-  const fc = frpColor(ev.frp)
+function KpiCard({ label, value, sub, color, icon }: { label: string; value: string; sub?: string; color?: string; icon?: React.ReactNode }) {
   return (
-    <div
-      onClick={onSelect}
-      style={{
-        display: 'grid',
-        gridTemplateColumns: '80px 90px 90px 70px 1fr',
-        alignItems: 'center',
-        padding: '7px 16px',
-        cursor: 'pointer',
-        borderBottom: '1px solid var(--b0)',
-        background: selected ? 'rgba(0,229,220,0.07)' : isNewest ? 'rgba(0,229,220,0.03)' : 'transparent',
-        borderLeft: `3px solid ${selected ? 'var(--cyan)' : isNewest ? 'rgba(0,229,220,0.3)' : 'transparent'}`,
-        transition: 'background 120ms',
-      }}
-      onMouseEnter={e => { if (!selected) (e.currentTarget as HTMLElement).style.background = 'var(--d5)' }}
-      onMouseLeave={e => { if (!selected) (e.currentTarget as HTMLElement).style.background = isNewest ? 'rgba(0,229,220,0.03)' : 'transparent' }}
-    >
-      <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--t3)' }}>
-        {formatAcqTime(ev.acquisition_time)}
-      </span>
-      <span style={{ fontSize: 13, color: 'var(--t2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-        {ev.satellite ?? '—'}
-      </span>
-      <span style={{ fontFamily: 'var(--font-mono)', fontSize: 13, color: fc, fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>
-        {ev.frp != null ? `${ev.frp.toLocaleString()}` : '—'}
-        <span style={{ fontSize: 10, color: 'var(--t4)', marginLeft: 3 }}>MW</span>
-      </span>
-      <span style={{ fontSize: 12, color: 'var(--t3)' }}>
-        {confidenceLabel(ev.confidence)}
-      </span>
-      <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--t4)', textAlign: 'right' }}>
-        {ev.latitude.toFixed(2)}°, {ev.longitude.toFixed(2)}°
-      </span>
+    <div className="kpi-module" style={{ flex: 1, minWidth: 0 }}>
+      {icon && <div style={{ position: 'absolute', top: 12, right: 14, opacity: 0.15 }}>{icon}</div>}
+      <div className="kpi-label">{label}</div>
+      <div className="kpi-value" style={{ color: color ?? 'var(--t1)', fontSize: 26 }}>{value}</div>
+      {sub && <div className="kpi-sub">{sub}</div>}
     </div>
   )
 }
 
 export default function HomePage() {
   const { events, statistics, status, error, selectedEvent, setSelectedEvent } = useAppContext()
-  const loading = status === 'loading'
-  const isErr   = status === 'error'
+  const navigate = useNavigate()
+  const [filter, setFilter] = useState<'all' | 'day' | 'night'>('all')
 
-  const total    = statistics?.total_detections != null ? statistics.total_detections.toLocaleString() : '—'
-  const today    = statistics?.detections_today != null ? statistics.detections_today.toLocaleString() : '—'
-  const peakFrp  = statistics?.max_frp          != null ? `${statistics.max_frp.toLocaleString()} MW`  : '—'
-  const satCount = statistics?.by_satellite ? Object.keys(statistics.by_satellite).length.toString()   : '—'
-  const latestAcq = events.length > 0 ? (events[0].acquisition_date ?? '—') : '—'
+  const filtered = filter === 'all' ? events
+    : events.filter(e => e.daynight === (filter === 'day' ? 'D' : 'N'))
+
+  function handleSelect(e: ApiThermalEvent) {
+    setSelectedEvent(e)
+    navigate('/risk')
+  }
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden', background: 'var(--d1)' }}>
 
-      {/* Stats bar */}
-      <div style={{
-        display: 'flex', gap: 10, padding: '12px 16px',
-        background: 'var(--d2)', borderBottom: '1px solid var(--b1)',
-        flexShrink: 0, alignItems: 'stretch',
-      }}>
-        <StatCard label="Total Fires"      value={total}    sub="all time in database"   accent="var(--amber)"  icon={Flame}/>
-        <StatCard label="Today"            value={today}    sub="fires in last 24 hours"  accent="var(--cyan)"/>
-        <StatCard label="Strongest Fire"   value={peakFrp}  sub="highest recorded"        accent="var(--th-0)"  icon={TrendingUp}/>
-        <StatCard label="Satellites"       value={satCount} sub="active platforms"        accent="var(--cyan)" icon={Satellite}/>
-        <StatCard label="Latest Data"      value={latestAcq} sub="most recent acquisition" icon={Calendar}/>
-        {events.length > 0 && statistics?.total_detections != null && (
-          <div style={{
-            flex: '0 0 auto', minWidth: 160,
-            background: 'var(--d4)', border: '1px solid var(--b1)',
-            borderTop: '3px solid var(--b2)', borderRadius: 10, padding: '12px 16px',
-          }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
-              <Database size={13} color="var(--t3)" strokeWidth={1.8}/>
-              <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Showing</span>
-            </div>
-            <div style={{ fontSize: 20, fontWeight: 800, color: 'var(--cyan)', fontVariantNumeric: 'tabular-nums', letterSpacing: '-0.01em', lineHeight: 1, marginBottom: 4 }}>
-              {events.length.toLocaleString()}
-            </div>
-            <div style={{ height: 3, background: 'var(--d6)', borderRadius: 2, overflow: 'hidden', marginBottom: 4 }}>
-              <div style={{
-                height: '100%',
-                width: `${Math.min(100, (events.length / statistics.total_detections) * 100)}%`,
-                background: 'linear-gradient(90deg, var(--cyan-2), var(--cyan))',
-                borderRadius: 2,
-              }}/>
-            </div>
-            <div style={{ fontSize: 11, color: 'var(--t4)' }}>
-              of {statistics.total_detections.toLocaleString()} total
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* Map + Inspector */}
-      <div style={{ flex: 1, display: 'flex', overflow: 'hidden', minHeight: 0 }}>
-
-        {/* Map */}
-        <div style={{ flex: 1, minWidth: 0, position: 'relative' }}>
-          <MapPanel
-            events={events}
-            selectedEvent={selectedEvent}
-            onSelect={setSelectedEvent}
-            status={status}
-            error={error}
+      {/* ── KPI strip ── */}
+      <div style={{ padding: '14px 20px 10px', flexShrink: 0, borderBottom: '1px solid var(--b1)' }}>
+        <div style={{ display: 'flex', gap: 10 }}>
+          <KpiCard
+            label="Total Detections"
+            value={statistics?.total_detections != null ? statistics.total_detections.toLocaleString() : '—'}
+            sub="all time"
+            color="var(--amber)"
+            icon={<Flame size={32}/>}
+          />
+          <KpiCard
+            label="Today"
+            value={statistics?.detections_today != null ? statistics.detections_today.toLocaleString() : '—'}
+            sub="current date"
+            icon={<TrendingUp size={32}/>}
+          />
+          <KpiCard
+            label="Last 7 Days"
+            value={statistics?.detections_last_7d != null ? statistics.detections_last_7d.toLocaleString() : '—'}
+            sub="rolling window"
+            icon={<Globe size={32}/>}
+          />
+          <KpiCard
+            label="Peak FRP"
+            value={statistics?.max_frp != null ? `${statistics.max_frp.toLocaleString()} MW` : '—'}
+            sub="all-time maximum"
+            color="var(--err)"
+            icon={<Flame size={32}/>}
+          />
+          <KpiCard
+            label="Avg FRP"
+            value={statistics?.avg_frp != null ? `${statistics.avg_frp.toFixed(0)} MW` : '—'}
+            sub="mean fire radiative power"
+            icon={<Satellite size={32}/>}
+          />
+          <KpiCard
+            label="Avg Brightness"
+            value={statistics?.avg_brightness != null ? `${statistics.avg_brightness.toFixed(0)} K` : '—'}
+            sub="mean brightness temp"
           />
         </div>
-
-        {/* Inspector panel */}
-        <div style={{
-          width: 300, minWidth: 300, flexShrink: 0,
-          background: 'var(--d3)', borderLeft: '1px solid var(--b1)',
-          display: 'flex', flexDirection: 'column', overflow: 'hidden',
-        }}>
-          <div style={{
-            padding: '10px 16px', borderBottom: '1px solid var(--b1)',
-            background: 'var(--d4)', flexShrink: 0,
-            display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-          }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <div style={{ width: 3, height: 16, background: 'var(--cyan)', borderRadius: 2, boxShadow: '0 0 6px var(--cyan)' }}/>
-              <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--t2)' }}>Fire Details</span>
-            </div>
-            {selectedEvent
-              ? <span style={{ fontSize: 11, color: 'var(--cyan)', background: 'var(--cyan-bg)', border: '1px solid var(--cyan-border)', borderRadius: 4, padding: '2px 8px' }}>Selected</span>
-              : <span style={{ fontSize: 11, color: 'var(--t4)' }}>Click a fire</span>
-            }
-          </div>
-          <EventInspector event={selectedEvent} status={status}/>
-        </div>
       </div>
 
-      {/* Recent fires stream */}
-      <div style={{ flexShrink: 0, padding: '0 16px 12px' }}>
-        <div style={{
-          background: 'var(--d3)', border: '1px solid var(--b1)',
-          borderRadius: 10, overflow: 'hidden',
-          maxHeight: 220, display: 'flex', flexDirection: 'column',
-        }}>
-          {/* Header */}
-          <div style={{
-            padding: '8px 16px', borderBottom: '1px solid var(--b1)',
-            background: 'var(--d4)', flexShrink: 0,
-            display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-          }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span className="live-dot" style={{ width: 7, height: 7 }}/>
-              <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--t2)' }}>Recent Fire Events</span>
-            </div>
-            <span style={{ fontSize: 12, color: 'var(--t4)' }}>
-              {events.length.toLocaleString()} loaded
-              {statistics?.total_detections != null && ` · ${statistics.total_detections.toLocaleString()} total`}
-            </span>
+      {/* ── Event stream ── */}
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', padding: '12px 20px 16px' }}>
+
+        {/* Table header */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10, flexShrink: 0 }}>
+          <div>
+            <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--t3)' }}>Event Stream</div>
+            <div style={{ fontSize: 11, color: 'var(--t4)', marginTop: 1 }}>{events.length.toLocaleString()} events loaded</div>
           </div>
-
-          {/* Column headers */}
-          {events.length > 0 && (
-            <div style={{
-              display: 'grid', gridTemplateColumns: '80px 90px 90px 70px 1fr',
-              padding: '5px 16px', background: 'var(--d4)',
-              borderBottom: '1px solid var(--b1)', flexShrink: 0,
-            }}>
-              {['Time', 'Satellite', 'Intensity', 'Confidence', 'Location'].map(h => (
-                <span key={h} style={{ fontSize: 11, fontWeight: 600, color: 'var(--t4)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>{h}</span>
-              ))}
-            </div>
-          )}
-
-          {/* Rows */}
-          <div style={{ overflowY: 'auto', flex: 1 }}>
-            {loading && (
-              <div style={{ padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 6 }}>
-                {[...Array(4)].map((_, i) => <div key={i} className="skeleton" style={{ height: 32, borderRadius: 4 }}/>)}
-              </div>
-            )}
-            {isErr && (
-              <div style={{ padding: '16px', display: 'flex', alignItems: 'center', gap: 10, color: 'var(--err)', fontSize: 13 }}>
-                <WifiOff size={14}/> Could not load fire data from the backend
-              </div>
-            )}
-            {!loading && !isErr && events.length === 0 && (
-              <div style={{ padding: '16px', fontSize: 13, color: 'var(--t4)' }}>
-                No events found. Check that the backend is running and data has been ingested.
-              </div>
-            )}
-            {!loading && events.slice(0, 120).map((ev, idx) => (
-              <EventRow
-                key={ev.event_id ?? `${ev.latitude},${ev.longitude}`}
-                ev={ev}
-                selected={selectedEvent?.event_id === ev.event_id}
-                onSelect={() => setSelectedEvent(ev)}
-                isNewest={idx === 0}
-              />
+          <div style={{ display: 'flex', gap: 4 }}>
+            {(['all', 'day', 'night'] as const).map(f => (
+              <button
+                key={f}
+                onClick={() => setFilter(f)}
+                className={`chip ${filter === f ? 'active' : ''}`}
+                style={{ fontSize: 10, padding: '3px 10px' }}
+              >
+                {f.toUpperCase()}
+              </button>
             ))}
           </div>
         </div>
+
+        {/* Status states */}
+        {status === 'loading' && (
+          <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 10, color: 'var(--t3)' }}>
+            <Loader size={20} color="var(--cyan)" style={{ animation: 'spin 0.9s linear infinite' }}/>
+            <span style={{ fontSize: 13 }}>Loading thermal observations…</span>
+          </div>
+        )}
+        {status === 'error' && (
+          <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 8, color: 'var(--err)' }}>
+            <AlertCircle size={20}/>
+            <span style={{ fontSize: 13 }}>Data source unavailable</span>
+            <span style={{ fontSize: 11, color: 'var(--t4)' }}>{error}</span>
+          </div>
+        )}
+
+        {(status === 'live' || status === 'empty') && (
+          <div style={{ flex: 1, overflow: 'hidden', background: 'var(--d3)', border: '1px solid var(--b1)', borderRadius: 9 }}>
+            {/* Column headers */}
+            <div style={{ display: 'grid', gridTemplateColumns: '130px 90px 72px 90px 80px 80px 110px 110px 1fr', padding: '7px 14px', borderBottom: '1px solid var(--b1)', background: 'var(--d4)' }}>
+              {['Event ID', 'Date', 'Time', 'FRP', 'Brightness', 'Conf.', 'Satellite', 'Source', 'Land Cover'].map(col => (
+                <div key={col} style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--t4)', fontFamily: 'var(--font-mono)' }}>{col}</div>
+              ))}
+            </div>
+
+            {/* Rows */}
+            <div style={{ overflowY: 'auto', height: 'calc(100% - 34px)' }}>
+              {filtered.length === 0 ? (
+                <div style={{ padding: '40px', textAlign: 'center', color: 'var(--t4)', fontSize: 13 }}>
+                  No thermal detections found.
+                </div>
+              ) : filtered.map((event, idx) => {
+                const isSelected = selectedEvent?.event_id === event.event_id
+                const c = frpColor(event.frp)
+                return (
+                  <div
+                    key={event.event_id ?? event.id}
+                    onClick={() => handleSelect(event)}
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: '130px 90px 72px 90px 80px 80px 110px 110px 1fr',
+                      padding: '6px 14px',
+                      borderBottom: '1px solid var(--b0)',
+                      cursor: 'pointer',
+                      background: isSelected ? 'rgba(29,232,227,0.06)' : idx % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.01)',
+                      borderLeft: `2px solid ${isSelected ? 'var(--cyan)' : 'transparent'}`,
+                      transition: 'background var(--ease)',
+                      alignItems: 'center',
+                    }}
+                    onMouseEnter={e => { if (!isSelected) (e.currentTarget as HTMLDivElement).style.background = 'var(--d5)' }}
+                    onMouseLeave={e => { if (!isSelected) (e.currentTarget as HTMLDivElement).style.background = idx % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.01)' }}
+                  >
+                    <div style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: isSelected ? 'var(--cyan)' : 'var(--t2)', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {event.event_id ?? `#${event.id}`}
+                    </div>
+                    <div style={{ fontSize: 11, color: 'var(--t3)', fontFamily: 'var(--font-mono)' }}>{event.acquisition_date ?? '—'}</div>
+                    <div style={{ fontSize: 11, color: 'var(--t4)', fontFamily: 'var(--font-mono)' }}>{formatAcqTime(event.acquisition_time)}</div>
+                    <div style={{ fontSize: 12, fontFamily: 'var(--font-mono)', color: c, fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>
+                      {event.frp != null ? `${event.frp.toLocaleString()} MW` : '—'}
+                    </div>
+                    <div style={{ fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--t3)', fontVariantNumeric: 'tabular-nums' }}>
+                      {event.brightness != null ? `${event.brightness.toFixed(1)} K` : '—'}
+                    </div>
+                    <div style={{ fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--t3)' }}>{confidenceLabel(event.confidence)}</div>
+                    <div style={{ fontSize: 11, color: 'var(--t3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{event.satellite ?? '—'}</div>
+                    <div style={{ fontSize: 11, color: 'var(--t4)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{event.firms_source ?? '—'}</div>
+                    <div style={{ fontSize: 11, color: 'var(--t4)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{event.worldcover_class_name ?? '—'}</div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   )

@@ -5,6 +5,7 @@
 // ============================================================
 
 export interface ApiThermalEvent {
+  id: number
   event_id: string | null
   latitude: number
   longitude: number
@@ -69,6 +70,7 @@ export interface ApiStatistics {
   by_satellite: Record<string, number>
   by_source: Record<string, number>
   by_daynight: Record<string, number>
+  by_landcover: Record<string, number>
   last_sync_at: string | null
   error?: string
 }
@@ -91,6 +93,8 @@ export interface ApiPipelineStatus {
   status: 'ok' | 'error'
   firms: ApiFirmsStatus | null
   worldcover: ApiWorldCoverStatus | null
+  osm?: { enriched: number; pending: number; errors: number } | null
+  scheduler?: { running: boolean; jobs: { id: string; name: string; next_run: string | null }[] } | null
   error?: string
 }
 
@@ -98,6 +102,21 @@ export interface ApiHealth {
   status: string
   service: string
   database: string
+}
+
+export interface ApiPrediction {
+  event_id: string | null
+  prediction: {
+    class: string
+    confidence: number
+    model: string
+  } | null
+  feature_completeness: {
+    osm_ready: boolean
+    temporal_ready: boolean
+    worldcover_ready: boolean
+  } | null
+  status?: string
 }
 
 export interface EventFilters {

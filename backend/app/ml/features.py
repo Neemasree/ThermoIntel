@@ -125,27 +125,32 @@ def handle_missing_values(df: pd.DataFrame) -> pd.DataFrame:
     # Proximity flags — assume not near if unknown
     for col in OSM_FLAG_FEATURES:
         if col in df.columns:
-            df[col] = df[col].fillna(0)
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
 
     # Land-cover — fill with 0
     for col in LAND_COVER_FEATURES:
         if col in df.columns:
-            df[col] = df[col].fillna(0.0)
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
 
     # Temporal — fill with 0
     for col in TEMPORAL_FEATURES:
         if col in df.columns:
-            df[col] = df[col].fillna(0.0)
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
 
     # Anomaly — fill with 0 (no deviation = baseline)
     for col in ANOMALY_FEATURES:
         if col in df.columns:
-            df[col] = df[col].fillna(0.0)
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
 
     # Thermal — fill with column median
     for col in ["brightness", "frp"]:
         if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
             df[col] = df[col].fillna(df[col].median())
+
+    for col in ["confidence", "day_night"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
 
     return df
 
